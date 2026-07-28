@@ -62,7 +62,7 @@ comparison. A visual improvement must not hide a material performance regression
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
 | V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `PROPOSED` | Operator feedback 2026-07-27; use the Homeworld reference for visual principle, not direct imitation | — | — |
 | V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Operator feedback 2026-07-27; retain clear target/radar sightlines | — | — |
-| V-008 | Start the player closer to stations, traffic, or other meaningful entities | `PROPOSED` | Operator feedback 2026-07-27; must remain collision-safe and avoid immediate hostile spawn traps | — | — |
+| V-008 | Start the player closer to stations, traffic, or other meaningful entities | `AWAITING AUDIT` | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Pending — needs an auditor other than Claude, who wrote this slice | Pending |
 
 ## Acceptance notes
 
@@ -536,6 +536,83 @@ deliver perceptible change than V-001 was.
 **Gate transition:** `AWAITING HUMAN` → `ACCEPTED`. Both merge-gate conditions are now
 met: auditor `PASS` on `b238423` and operator `ACCEPTED`. V-001 is ready to merge
 upstream whenever the operator wants the PR opened.
+
+### 2026-07-27 — Claude — worker — V-008 opening spawn placement
+
+**Role note, read first:** I audited V-001. For V-008 I am the *worker*, so the rule
+that a worker does not approve its own work applies to me here. Nothing below is a
+verdict; V-008 needs an auditor who did not write it — Codex, or the operator directly.
+
+**Branch/commit:** `claude/v008-spawn-proximity`, branched from `205f9c6` (the V-001
+branch tip, so the preview keeps V-001's accepted renderer). Implementation commit
+`c3a417c`. Work was done in a separate worktree so the operator's uncommitted changes in
+the main tree were never staged or disturbed.
+
+**Measured problem:** at 1280 × 720 with the default shuttle (max speed 220 u/s), the
+player started at the system origin with:
+
+| | Baseline | After |
+|---|---|---|
+| Nearest station | 6159 u (TERRA INDUSTRIAL) | 795 u |
+| Nearest entity of any kind | 5500 u (Terra) | ~431 u (freighter) |
+| Transit time to nearest point of interest at full throttle | ~25 s | ~2 s |
+| Nearest hostile | 13466 u | 12730 u |
+
+**What changed:** `src/game.js` only, +53 lines, no deletions. Adds `placeOpeningSpawn()`
+and `spawnPosClear()`, called once from `init()` after `G.asteroids` is built and before
+the NPC spawn block. The spawn point is offset from the first non-criminal station,
+backed off along -Z so the identity start orientation looks straight at it, and nudged
+laterally away from whichever planet that station orbits.
+
+**Why computed rather than hardcoded:** TERRA INDUSTRIAL orbits Terra at 825 u, but
+Terra's atmosphere warning fires at `r*1.08*2.5` = 918 u — so the station sits *inside*
+its own planet's warning ring. A naive "spawn next to the station" would have started
+every game with a pulsing red hazard alarm. The lateral nudge plus hazard check avoids
+that, and the same check keeps the placement valid if a system layout changes. If no
+candidate clears, it returns the legacy origin rather than risk a hazard.
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; the
+game launches with no page errors. Spawn state was probed over **16 runs** (NPC placement
+is random, so one run proves nothing):
+
+- `_atmoDanger` false in every run; `_proxDanger` false in every run.
+- No armour or structure loss at spawn in any run; never auto-docked.
+- Minimum planet-surface clearance 970 u; minimum asteroid clearance ~12100 u.
+- Minimum hostile distance 12730 u — no hostile spawn trap.
+
+**Collision safety is structural, not just observed.** Station-spawned NPCs are placed in
+a 150–650 u shell around the station (`spawnNPC` in `src/npc.js`), and the player sits
+795 u from the station centre, so the closest any station-spawned NPC can *ever* be at
+t=0 is ~145 u. Combined hull sizes are under ~40 u, so a spawn collision is not merely
+unobserved, it is unreachable by construction. The closest observed was 148 u, which
+matches that floor.
+
+**Captures:** `docs/audit/v-008/01-spawn-before-205f9c6.png` and `02-spawn-after.png`,
+same viewport and both 300 ms after launch. The opening view goes from an essentially
+empty starfield to the station, Terra, Luna, and roughly a dozen traffic contacts in
+frame, with a target readout already populated.
+
+**Findings and open risks:**
+
+1. **Scope is the initial spawn only.** Arrival after a jump still uses the launch-zone
+   placement in `loadSystem`, which this slice does not touch. If empty transit on
+   arrival is also a complaint, that is a separate slice.
+2. **Other systems are untested.** Only SOL was measured. The placement is computed, so
+   it should hold elsewhere, but PROXIMA, SIRIUS, and VEGA have not been probed — an
+   auditor should check at least one other system, especially one where the first lawful
+   station orbits a large planet.
+3. **The tuning constants are judgement, not derivation.** `SPAWN_BACK` 750,
+   `SPAWN_LATERAL` 250, and `SPAWN_CLEAR` 200 were chosen to put the station at a
+   readable on-screen size while clearing hazards; they are worth an opinion at the
+   human gate rather than acceptance by default.
+4. **This changes difficulty, not just composition.** Starting beside a busy hub means
+   traffic, corporate security, and militia are immediately in sensor range. Nothing
+   hostile is nearby, but the opening is no longer quiet, which is a design change the
+   operator should confirm is wanted.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** `PROPOSED` → `AWAITING AUDIT`.
 
 ## Entry template
 
