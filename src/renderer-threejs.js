@@ -124,9 +124,66 @@ function _convexHullGeo(verts) {
 // Convert {verts} model to a solid Mesh.
 // The {verts, edges} data in data-models.js is unchanged and
 // continues to be used by canvas.js for MFD/radar wireframes.
+// Box-projected UVs for hull geometry. Convex hulls carry no UVs, so the plating
+// map had nothing to sample. Each triangle is projected along its dominant normal
+// axis, which is cheap, seam-free for panel detail, and keeps plate size constant
+// in world units regardless of how big the object is.
+const _HULL_UV_SCALE = 1 / 26;
+function _boxUVs(geo, scale) {
+  const pa = geo.getAttribute('position');
+  const uv = new Float32Array(pa.count * 2);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const ab = new THREE.Vector3(), ac = new THREE.Vector3(), n = new THREE.Vector3();
+  for (let t = 0; t + 2 < pa.count; t += 3) {
+    a.fromBufferAttribute(pa, t);
+    b.fromBufferAttribute(pa, t + 1);
+    c.fromBufferAttribute(pa, t + 2);
+    ab.subVectors(b, a); ac.subVectors(c, a); n.crossVectors(ab, ac);
+    const ax = Math.abs(n.x), ay = Math.abs(n.y), az = Math.abs(n.z);
+    let i0, i1;
+    if (ax >= ay && ax >= az)      { i0 = 2; i1 = 1; }   // dominant X → project ZY
+    else if (ay >= az)             { i0 = 0; i1 = 2; }   // dominant Y → project XZ
+    else                           { i0 = 0; i1 = 1; }   // dominant Z → project XY
+    for (let k = 0; k < 3; k++) {
+      const v = k === 0 ? a : (k === 1 ? b : c);
+      const comp = [v.x, v.y, v.z];
+      uv[(t + k) * 2]     = comp[i0] * scale;
+      uv[(t + k) * 2 + 1] = comp[i1] * scale;
+    }
+  }
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+}
+
+// Per-face tone, baked into vertex colours so it costs no extra draw call and no
+// extra material. Upward faces catch more light and a small positional hash varies
+// neighbouring plates, which stops a faceted hull reading as one moulded piece.
+function _faceTones(geo, lo, hi) {
+  const pa = geo.getAttribute('position');
+  const cols = new Float32Array(pa.count * 3);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const ab = new THREE.Vector3(), ac = new THREE.Vector3(), n = new THREE.Vector3();
+  for (let t = 0; t + 2 < pa.count; t += 3) {
+    a.fromBufferAttribute(pa, t);
+    b.fromBufferAttribute(pa, t + 1);
+    c.fromBufferAttribute(pa, t + 2);
+    ab.subVectors(b, a); ac.subVectors(c, a); n.crossVectors(ab, ac).normalize();
+    const cx = (a.x + b.x + c.x) / 3, cy = (a.y + b.y + c.y) / 3, cz = (a.z + b.z + c.z) / 3;
+    // Deterministic hash so a given hull always looks the same.
+    const h = Math.abs(Math.sin(cx * 12.9898 + cy * 78.233 + cz * 37.719) * 43758.5453) % 1;
+    const up = 0.5 + 0.5 * n.y;
+    const tone = lo + (hi - lo) * (0.55 * up + 0.45 * h);
+    for (let k = 0; k < 3; k++) {
+      cols[(t + k) * 3] = tone; cols[(t + k) * 3 + 1] = tone; cols[(t + k) * 3 + 2] = tone;
+    }
+  }
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+}
+
 function _modelToMesh(model, col) {
   const geo = _convexHullGeo(model.verts);
-  return new THREE.Mesh(geo, _meshMat(col));
+  _boxUVs(geo, _HULL_UV_SCALE);
+  _faceTones(geo, 0.74, 1.10);
+  return new THREE.Mesh(geo, _hullMat(col));
 }
 
 // Small native-Three reflection studio. It gives metal hulls readable cool/warm

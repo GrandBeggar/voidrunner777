@@ -64,9 +64,9 @@ comparison. A visual improvement must not hide a material performance regression
 | V-009 | Atmospheric rim halo around planet limbs | `AWAITING AUDIT` | Operator feedback 2026-07-28 (No Man's Sky reference). Branch `claude/v006-planet-surfaces`, commit `fba96e5`. Impact-parameter shader; limb glow decays to background over ~28px | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "that looks excellent" |
 | V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `ACCEPTED` (parked) | Branch `claude/v007-cockpit-frame`; commit `a80e567`. Centre view and warning row measured unchanged (22.78 → 22.77, 17.20 → 17.22) | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "ya this is fine", but HUD treated as placeholder pending upstream direction |
 | V-010 | Stations as assembled structures instead of convex-hull blobs | `AWAITING AUDIT` | Branch `claude/v010-station-structure`; commit `78d5abe`. Spawn-view cost 74 → 78 draw calls, 22490 → 25716 tris | Pending — needs an auditor other than Claude | Pending |
-| V-013 | Station plating and two-tone materials | `AWAITING AUDIT` | Branch `claude/v013-station-texture`; commit `ee6ac67`. Saturation spread 0.150 → 0.281, near-neutral pixels 0.2% → 11.6%, mean hue held 156.5 → 147.6 | Pending — needs an auditor other than Claude | Pending |
-| V-011 | NPC and player ship hulls — same convex-hull flattening as stations | `PROPOSED` | Not started. `_modelToMesh` discards all concavity; ships read as faceted shards at close range | — | — |
-| V-012 | Cargo containers, asteroids, pirate bases and landing zones | `PROPOSED` | Not started. Cargo is a bare `BoxGeometry`; pirate bases still use the convex hull | — | — |
+| V-013 | Station plating and two-tone materials | `ACCEPTED` (audit gate open) | Branch `claude/v013-station-texture`; commit `ee6ac67`. Saturation spread 0.150 → 0.281, near-neutral pixels 0.2% → 11.6%, mean hue held 156.5 → 147.6 | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "much better already" |
+| V-011 | Plated materials for all convex-hull manufactured objects — ships, pirate bases, capital components, launch zone | `AWAITING AUDIT` | Branch `claude/v011-hull-plating`; commit pending. Box-projected UVs + per-face vertex tones; 45/45 NPC hulls carry both; no draw-call increase | Pending — needs an auditor other than Claude | Pending |
+| V-012 | Asteroids, cargo containers and landing zones | `PROPOSED` | Not started. Asteroids need a rock map, not the metal plating map; cargo is a bare `BoxGeometry` with unscaled UVs. Pirate bases moved into V-011 | — | — |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
 ## Acceptance notes
@@ -1135,6 +1135,75 @@ longer dingy.
 **Verdict:** n/a — worker entry.
 
 **Gate transition:** V-013 `PROPOSED` → `AWAITING AUDIT`.
+
+### 2026-07-28 — Operator — human — V-013 accepted, v1-breadth strategy set
+
+**Operator feedback, verbatim:** "much better already.. ok.. let's keep going.. we can do
+finishing passes over all of these objects later, but just getting them up to v1 makes a
+huge difference."
+
+**Disposition:** V-013 `ACCEPTED`. More importantly this sets a working policy: prefer
+breadth across every placeholder object over depth on any one of them. Polish passes are
+explicitly deferred, not forgotten. Slices should therefore be scoped to lift a whole
+class of object to a credible v1 rather than perfecting a single one.
+
+**Gate transition:** V-013 `AWAITING AUDIT` → `ACCEPTED` on the operator gate. Auditor
+gate remains open.
+
+### 2026-07-28 — Claude — worker — V-011 plated hulls across manufactured objects
+
+**Role note:** worker; cannot supply the auditor `PASS`.
+
+**Branch/commit:** `claude/v011-hull-plating`, branched from `c09caae`. Separate worktree;
+operator's uncommitted work untouched.
+
+**Scope chosen to match the v1-breadth policy.** `_modelToMesh()` is the single
+constructor behind NPC and player ship hulls, pirate bases, capital-ship components and
+the launch zone. Changing it once lifts all of them, which is why this slice is a sweep
+rather than a ship-only change. Pirate bases were moved out of V-012 into this slice for
+that reason — they were sitting next to freshly plated stations still looking like
+untextured blobs.
+
+**What changed:** `src/renderer-threejs.js` only. Two new helpers plus a three-line change
+to `_modelToMesh`:
+
+1. `_boxUVs()` — convex hulls carry no UVs at all, so V-013's plating map had nothing to
+   sample on anything except stations. Each triangle is projected along its dominant
+   normal axis. Cheap, seam-free for panel detail, and because the projection is in world
+   units the plate size stays constant whether the object is a 12 u shuttle or a 75 u
+   pirate base.
+2. `_faceTones()` — per-face brightness baked into vertex colours from face normal plus a
+   deterministic positional hash. Costs no extra draw call and no extra material, and
+   stops a faceted hull reading as one moulded piece.
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; no page
+errors. Verified on the running game rather than by inspection: **45 of 45** live NPC hull
+geometries carry both a `uv` and a `color` attribute, and the pirate base does too.
+
+**Cost:** this is a material swap, not added geometry — same mesh count, same triangle
+count, no new draw calls. Measured 72 calls / 25466 triangles at spawn, inside the normal
+run-to-run range for a randomly populated scene. As noted in V-013, I am not quoting
+call deltas as a headline because NPC population is random between runs; the meaningful
+claim is structural: no mesh or material is added per object.
+
+**Findings and open risks:**
+
+1. **Asteroids deliberately excluded.** They use `_convexHullGeo` too and would pick up
+   the machinery for free, but a *metal panel* map on rock would look wrong. They need
+   their own mottled map, which is V-012. The pirate-base capture in
+   `docs/audit/v-011/` shows both together and makes the remaining gap obvious.
+2. **Cargo boxes excluded.** `BoxGeometry` already has UVs, but they are 0–1 across a
+   3.2 u box, so the plating map would appear enormously magnified. They need the same
+   world-scale treatment; also V-012.
+3. **UV scale is a single global constant** (1/26). It suits shuttles through pirate
+   bases, but a much larger or smaller hull would want its own scale.
+4. **Every faction shares one plating map.** Only hue differs, same limitation as V-013.
+5. **Capital-ship components now plate too**, which was not separately verified beyond
+   the shared code path — an auditor should confirm a capital ship still reads correctly.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** V-011 `PROPOSED` → `AWAITING AUDIT`.
 
 ## Entry template
 
