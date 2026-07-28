@@ -55,8 +55,8 @@ comparison. A visual improvement must not hide a material performance regression
 
 | ID | Slice | State | Worker evidence | Auditor | Human gate |
 |---|---|---|---|---|---|
-| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING AUDIT` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`; remediation pending re-audit | Pending |
-| V-002 | Low-threshold bloom for emissive bullets, particles, and engines | `DEFERRED` | Requires a post-processing pipeline and a measured frame-time budget | — | — |
+| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING HUMAN` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Pending — needs `ACCEPTED` from Stephen or Doran |
+| V-002 | Low-threshold bloom for emissive bullets, particles, and engines | `DEFERRED` | Requires a post-processing pipeline and a measured frame-time budget. Re-audit note: Linear tone mapping leaves ~27% of the station hull region hard-clipped, so bloom will key off far more area than the baseline look implies — revisit tone mapping as part of this slice | — | — |
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
@@ -282,6 +282,94 @@ V-001 no longer amplifies it.
 
 **Gate transition:** `CHANGES REQUESTED` → `AWAITING AUDIT` after remediation commit
 `b238423` was created. The human gate remains pending.
+
+### 2026-07-27 — Claude — auditor — V-001 re-audit of remediation
+
+**Branch/commit:** `codex/visual-upgrade-v1` at remediation commit
+`b238423f75da9c1f8b0bd988ce0d9511cf81d55c`. Re-measured against pre-slice baseline
+`0446bf3` and the original implementation `bdf4561`. All three were checked out into
+separate throwaway worktrees and served on separate local HTTP ports simultaneously,
+so the three readings come from the same tooling, viewport, and measurement box.
+
+**What was reviewed:** the remediation diff, which touches only
+`src/renderer-threejs.js` (+6 / −40) — scope is clean and matches the declared change.
+
+**Where to look:** `src/renderer-threejs.js` — `initScene` (tone mapping),
+`_modelToMesh` (edge overlay removed), `_buildReflectionEnvironment` (PMREM sigma).
+
+**Evidence:** all 16 `src/*.js` files pass `node --check`; `git diff --check` on
+`b238423^..b238423` is clean; the build launches over local HTTP at 1280 × 720 with no
+page errors and no console output beyond a pre-existing `favicon.ico` 404. Remediated
+captures are committed as `docs/audit/v-001/08-*`, `09-*`, and `10-*`.
+
+Station hull, same fixed 130 × 120 px region and same camera offset as the first audit:
+
+| Build | mean R | mean G | mean B | mean saturation | clipped px | PMREM warnings |
+|---|---|---|---|---|---|---|
+| `0446bf3` baseline | 16.7 | 138.7 | 86.8 | 0.956 | 23.79% | 0 |
+| `bdf4561` original | 103.4 | 157.0 | 142.7 | 0.632 | 1.21% | 2 |
+| `b238423` remediated | 21.6 | 157.7 | 123.5 | 0.833 | 26.90% | 0 |
+
+**Findings:**
+
+1. **Blocking finding resolved.** Mean saturation recovers from 0.632 to 0.833 against
+   a 0.956 baseline, and mean red — the clearest signal of the wash toward white — falls
+   from 103.4 back to 21.6 against a 16.7 baseline. Faction colour identity is restored.
+   Comparing `docs/audit/v-001/10-hull-closeup-remediated-b238423.png` with the baseline
+   `05-*` and the original `06-*`, the remediated build is arguably the best of the
+   three: it keeps the identity green while the reflection environment now produces
+   genuine per-facet hue variation (cool cyan on the panel-lit left facets) instead of
+   flattening everything toward white. The reflection work pays off once tone mapping
+   is no longer fighting it.
+
+2. **PMREM warnings confirmed eliminated.** Sigma 0.03 stays under the sample limit:
+   0 warnings on baseline, 2 on `bdf4561`, 0 on `b238423`.
+
+3. **Correction to my own tooling, disclosed.** My first re-audit script filtered
+   console events on `type() === 'warning'`, but Puppeteer reports these as `warn`, so
+   the script initially reported 0 PMREM warnings for *both* `bdf4561` and `b238423` —
+   a false negative that would have wrongly credited the fix. I caught it because the
+   zero for `bdf4561` contradicted the first audit, re-ran with a corrected filter, and
+   the numbers above are from the corrected run. Recording this because a process whose
+   value rests on evidence integrity should hold the auditor's instruments to the same
+   standard as the worker's claims.
+
+4. **New observation, non-blocking — Linear hard-clips where ACES rolled off.**
+   Clipped pixels in the measured region go from 1.21% under ACES to 26.90% under
+   Linear, which is also ~3 points above the 23.79% pre-slice baseline; the extra is
+   attributable to the added reflection light. This is inherent to Linear tone mapping
+   rather than a defect, the facet gradient is visibly preserved, and the result matches
+   the art direction the project already shipped — so it does not block. It is worth
+   carrying forward to **V-002**: low-threshold bloom feeds on exactly these clipped
+   highlights, and at 27% clipped area the station would bloom far more aggressively
+   than the baseline look implies. V-002 should re-examine tone mapping rather than
+   treat it as settled.
+
+5. **Edge-overlay removal is clean.** No orphan references to `_edgeMat`, `edgeGeo`, or
+   `EdgesGeometry` remain. The two surviving `LineSegments` uses are the unrelated
+   pre-existing landing-zone wireframe helper. `model.edges` is still consumed by the 2D
+   MFD/radar path, which this slice does not touch.
+
+6. **Retained items verified present, not just claimed.** `_disposeObj` still traverses,
+   `outputColorSpace` is still `SRGBColorSpace`, and the nebula and reflection
+   environment are still built in `initScene`.
+
+7. **No performance claim is made or implied.** Removing the overlay necessarily removes
+   one draw call per procedural hull, but frame time here remains vsync-capped on
+   software rendering, so nothing measured constitutes a performance result. The
+   real-GPU stress scene stays outstanding, consistent with the worker's own statement.
+
+8. **V-005 correctly kept separate**, and the worker is right that removing the edge
+   overlay means V-001 no longer amplifies it. The underlying leak is untouched and
+   still real.
+
+**Verdict:** PASS
+
+**Gate transition:** `AWAITING AUDIT` → `AWAITING HUMAN`. Per the merge gate, V-001
+now needs an explicit `ACCEPTED` from Stephen or Doran before it is ready to merge.
+The specific thing to eyeball is `docs/audit/v-001/09-station-remediated-b238423.png`
+and `10-hull-closeup-remediated-b238423.png`: confirm the station green reads as the
+correct faction identity colour and the nebula stays subordinate to HUD legibility.
 
 ## Entry template
 
