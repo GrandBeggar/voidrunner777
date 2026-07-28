@@ -62,7 +62,7 @@ comparison. A visual improvement must not hide a material performance regression
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
 | V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `PROPOSED` | Operator feedback 2026-07-27; use the Homeworld reference for visual principle, not direct imitation | — | — |
 | V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Operator feedback 2026-07-27; retain clear target/radar sightlines | — | — |
-| V-008 | Start the player closer to stations, traffic, or other meaningful entities | `AWAITING AUDIT` | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Pending — needs an auditor other than Claude, who wrote this slice | Pending |
+| V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
 ## Acceptance notes
 
@@ -613,6 +613,32 @@ frame, with a target readout already populated.
 **Verdict:** n/a — worker entry.
 
 **Gate transition:** `PROPOSED` → `AWAITING AUDIT`.
+
+### 2026-07-27 — Operator — human — V-008 acceptance
+
+**Branch/commit:** `claude/v008-spawn-proximity` at `525844d`, reviewed on the hosted
+preview.
+
+**Operator feedback, verbatim:** "ya good"
+
+**Disposition:** `ACCEPTED`. This also resolves the open design question raised in the
+worker entry — the busier, no-longer-quiet opening is wanted, not an unintended side
+effect.
+
+**Outstanding gate, recorded rather than glossed:** no independent audit was performed.
+Claude wrote this slice, so under the participants rule it cannot supply the auditor
+`PASS`, and the merge gate requires both an auditor `PASS` and an operator `ACCEPTED`.
+V-008 is therefore operator-accepted but not yet merge-ready by the file's own standard.
+Two ways to close it: have Codex audit `c3a417c` independently, or have the operator
+explicitly waive the audit for this slice and record that waiver here. The three open
+risks from the worker entry are also still unexamined by anyone but their author —
+untested systems beyond SOL, judgement-based tuning constants, and scope limited to the
+initial spawn rather than post-jump arrival.
+
+**Verdict:** ACCEPTED
+
+**Gate transition:** `AWAITING AUDIT` → `ACCEPTED` on the operator gate. The auditor gate
+remains open.
 
 ## Entry template
 
