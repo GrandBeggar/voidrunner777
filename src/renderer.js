@@ -861,6 +861,72 @@ function drawNavMFD(){
 // ═══════════════════════════════════════════════════════════
 //  COCKPIT — ship-aware wireframe interior
 // ═══════════════════════════════════════════════════════════
+// Windscreen opening. Traced twice — once to punch the hole in the frame fill,
+// once to stroke the inner edge — so the two can never drift apart.
+// Tuned to clear the protected HUD regions: centre view, the warning line at
+// H*0.22, the radar at (W-100, H-160) r60, and the right-hand MFD column.
+function _canopyOpening(inset){
+  const i = inset || 0;
+  ctx.moveTo(W*.150 + i, H*.075 + i);
+  ctx.lineTo(W*.350,     H*.042 + i);
+  ctx.lineTo(CX,         H*.032 + i);
+  ctx.lineTo(W*.650,     H*.042 + i);
+  ctx.lineTo(W*.850 - i, H*.075 + i);
+  ctx.lineTo(W*.915 - i, H*.420);
+  ctx.lineTo(W*.885 - i, H*.730 - i);
+  ctx.lineTo(W*.115 + i, H*.730 - i);
+  ctx.lineTo(W*.085 + i, H*.420);
+  ctx.closePath();
+}
+
+function _canopyFrame(shipCol, tier){
+  // Outer rect runs well past the viewport so roll cannot swing an uncovered
+  // corner into view.
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#010806';
+  ctx.beginPath();
+  ctx.rect(-W, -H, W * 3, H * 3);
+  _canopyOpening(0);
+  ctx.fill('evenodd');
+
+  // Structural edge: a bright inner lip over a heavier dim member reads as a
+  // machined frame rather than a drawn outline.
+  ctx.strokeStyle = shipCol;
+  ctx.globalAlpha = .13; ctx.lineWidth = 16;
+  ctx.beginPath(); _canopyOpening(0); ctx.stroke();
+  ctx.globalAlpha = .34; ctx.lineWidth = 2;
+  ctx.beginPath(); _canopyOpening(0); ctx.stroke();
+  ctx.globalAlpha = .14; ctx.lineWidth = 1;
+  ctx.beginPath(); _canopyOpening(9); ctx.stroke();
+
+  // Corner gussets — short diagonals where the pillars meet the roof, the detail
+  // that makes a frame look fabricated rather than extruded.
+  ctx.globalAlpha = .30; ctx.lineWidth = 2;
+  const gus = [
+    [W*.150, H*.075, W*.196, H*.120],
+    [W*.850, H*.075, W*.804, H*.120],
+    [W*.115, H*.730, W*.158, H*.686],
+    [W*.885, H*.730, W*.842, H*.686],
+  ];
+  gus.forEach(([x1,y1,x2,y2]) => {
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  });
+
+  // Ribs along the pillars — count rises with hull tier, so heavier ships read
+  // as more heavily built without needing per-ship art.
+  const ribs = 2 + Math.min(tier, 4);
+  ctx.globalAlpha = .22; ctx.lineWidth = 1.5;
+  for (let s = 0; s < ribs; s++) {
+    const t = (s + 1) / (ribs + 1);
+    const y = H * (.075 + t * (.730 - .075));
+    const xl = W * (.150 - t * (.150 - .085)) - (t > .55 ? W * (t - .55) * .07 : 0);
+    const xr = W - xl;
+    ctx.beginPath(); ctx.moveTo(xl - W*.055, y); ctx.lineTo(xl, y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(xr, y); ctx.lineTo(xr + W*.055, y); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+}
+
 function drawCockpit(){
   const p=G.p;
   const shipCol = SHIP_DEFS[p.shipKey]?.col || '#00ffcc';
@@ -870,6 +936,14 @@ function drawCockpit(){
   ctx.translate(CX,CY);
   ctx.rotate(p.roll);
   ctx.translate(-CX,-CY);
+
+  // ── CANOPY FRAME — solid structure around a windscreen opening ──
+  // Previously two thin A-pillar lines, which read as an overlay rather than a
+  // ship. Filling everything outside the opening gives the frame real mass and a
+  // silhouette. Drawn first so the console below and every instrument after it
+  // land on top: drawCockpit is the first HUD call, so radar, MFD, warnings and
+  // target brackets all stay legible, and the opening keeps the central view clear.
+  _canopyFrame(shipCol, tier);
 
   // ── DASHBOARD / CONSOLE PANEL (bottom) ──
   // Solid dark fill so space doesn't show through
@@ -914,13 +988,22 @@ function drawCockpit(){
   ctx.beginPath(); ctx.moveTo(CX, H*.73); ctx.lineTo(CX, H*.95); ctx.stroke();
 
   // ── INSTRUMENT BLOCKS (left & right of center) ──
-  ctx.globalAlpha=.18; ctx.lineWidth=1;
-  // Left instrument panel
-  ctx.strokeRect(W*.18, H*.77, W*.12, H*.08);
-  ctx.strokeRect(W*.18, H*.86, W*.12, H*.05);
-  // Right instrument panel
-  ctx.strokeRect(W*.70, H*.77, W*.12, H*.08);
-  ctx.strokeRect(W*.70, H*.86, W*.12, H*.05);
+  // Recessed rather than outlined: a dark well, a shadowed top-left edge and a lit
+  // bottom-right edge. Two extra strokes per panel is all it takes to read as
+  // depth instead of a rectangle drawn on a flat surface.
+  const _inset = (x, y, w, h) => {
+    ctx.globalAlpha=.55; ctx.fillStyle='#000503';
+    ctx.fillRect(x, y, w, h);
+    ctx.globalAlpha=.30; ctx.lineWidth=1.5; ctx.strokeStyle='#000000';
+    ctx.beginPath(); ctx.moveTo(x, y+h); ctx.lineTo(x, y); ctx.lineTo(x+w, y); ctx.stroke();
+    ctx.globalAlpha=.22; ctx.strokeStyle=shipCol;
+    ctx.beginPath(); ctx.moveTo(x+w, y); ctx.lineTo(x+w, y+h); ctx.lineTo(x, y+h); ctx.stroke();
+  };
+  _inset(W*.18, H*.77, W*.12, H*.08);
+  _inset(W*.18, H*.86, W*.12, H*.05);
+  _inset(W*.70, H*.77, W*.12, H*.08);
+  _inset(W*.70, H*.86, W*.12, H*.05);
+  ctx.strokeStyle=shipCol;
 
   // ── NOSE / CANOPY STRUTS ──
   ctx.lineWidth=2; ctx.globalAlpha=.4; ctx.strokeStyle=shipCol;
@@ -939,32 +1022,6 @@ function drawCockpit(){
   ctx.lineTo(CX+20, H*.60);
   ctx.stroke();
 
-  // ── CANOPY FRAME — two main A-pillar struts from corners ──
-  ctx.lineWidth=2; ctx.globalAlpha=.25;
-
-  // Left A-pillar
-  ctx.beginPath();
-  ctx.moveTo(0, H*.78);
-  ctx.lineTo(W*.08, H*.45);
-  ctx.lineTo(W*.15, H*.08);
-  ctx.stroke();
-
-  // Right A-pillar
-  ctx.beginPath();
-  ctx.moveTo(W, H*.78);
-  ctx.lineTo(W*.92, H*.45);
-  ctx.lineTo(W*.85, H*.08);
-  ctx.stroke();
-
-  // Top crossbar
-  ctx.globalAlpha=.15; ctx.lineWidth=1.5;
-  ctx.beginPath();
-  ctx.moveTo(W*.15, H*.08);
-  ctx.lineTo(W*.35, H*.04);
-  ctx.lineTo(CX, H*.03);
-  ctx.lineTo(W*.65, H*.04);
-  ctx.lineTo(W*.85, H*.08);
-  ctx.stroke();
 
   // Secondary struts (depends on ship tier — more struts = heavier ship)
   if(tier >= 2){
