@@ -55,7 +55,7 @@ comparison. A visual improvement must not hide a material performance regression
 
 | ID | Slice | State | Worker evidence | Auditor | Human gate |
 |---|---|---|---|---|---|
-| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING HUMAN` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Operator 2026-07-27: accepted for live preview. Preview is live and verified at <https://grandbeggar.github.io/voidrunner777/> (build `afa0733`, desktop browser required) — awaiting final visual confirmation |
+| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `ACCEPTED` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Operator 2026-07-27: `ACCEPTED` after live review — "i don't see any issues. nothing is super noticeable yet." Ready to merge |
 | V-002 | Low-threshold bloom for emissive bullets, particles, and engines | `DEFERRED` | Requires a post-processing pipeline and a measured frame-time budget. Re-audit note: Linear tone mapping leaves ~27% of the station hull region hard-clipped, so bloom will key off far more area than the baseline look implies — revisit tone mapping as part of this slice | — | — |
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
@@ -510,6 +510,32 @@ correction of record instead.
 **Verdict:** n/a — editorial pass.
 
 **Gate transition:** none.
+
+### 2026-07-27 — Operator — human — V-001 live review and acceptance
+
+**Branch/commit:** hosted preview at <https://grandbeggar.github.io/voidrunner777/>,
+build `afa0733`, containing remediation `b238423`.
+
+**Operator feedback, verbatim:** "i don't see any issues. nothing is super noticeable
+yet."
+
+**Disposition:** `ACCEPTED`. The live-review precondition set earlier is satisfied — the
+build was reviewed running, not from screenshots, and nothing is broken. Recorded as
+acceptance of correctness, not as a claim that the slice is visually impactful.
+
+**Signal worth carrying forward:** "nothing is super noticeable yet" is the more useful
+half of this feedback. V-001 was deliberately conservative — restrained nebula, subtle
+reflections, and after remediation a tone-mapping change that mostly *restores* the
+original colour rather than adding anything. The measured deltas were real but small at
+normal play distance. Later slices should be judged partly on whether a player notices
+them without being told to look, and V-006 through V-008 are all better positioned to
+deliver perceptible change than V-001 was.
+
+**Verdict:** ACCEPTED
+
+**Gate transition:** `AWAITING HUMAN` → `ACCEPTED`. Both merge-gate conditions are now
+met: auditor `PASS` on `b238423` and operator `ACCEPTED`. V-001 is ready to merge
+upstream whenever the operator wants the PR opened.
 
 ## Entry template
 
