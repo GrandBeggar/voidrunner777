@@ -57,23 +57,6 @@ function _meshMat(col) {
   return _meshMatCache[col];
 }
 
-// Procedural hull edges are the strongest authored detail in the source models.
-// Keep them visible over the convex hull so the low-poly look reads as deliberate.
-const _edgeMatCache = {};
-function _edgeMat(col) {
-  if (!_edgeMatCache[col]) {
-    _edgeMatCache[col] = new THREE.LineBasicMaterial({
-      color: new THREE.Color(col),
-      transparent: true,
-      opacity: 0.48,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      toneMapped: false,
-    });
-  }
-  return _edgeMatCache[col];
-}
-
 // Color cache (for bullets/particles)
 const _colCache = {};
 function _col(str) {
@@ -143,26 +126,7 @@ function _convexHullGeo(verts) {
 // continues to be used by canvas.js for MFD/radar wireframes.
 function _modelToMesh(model, col) {
   const geo = _convexHullGeo(model.verts);
-  const mesh = new THREE.Mesh(geo, _meshMat(col));
-  let edgeGeo;
-
-  if (model.edges?.length) {
-    const positions = [];
-    model.edges.forEach(([i, j]) => {
-      const a = model.verts[i], b = model.verts[j];
-      positions.push(a[0],a[1],a[2], b[0],b[1],b[2]);
-    });
-    edgeGeo = new THREE.BufferGeometry();
-    edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  } else {
-    edgeGeo = new THREE.EdgesGeometry(geo, 25);
-  }
-
-  const edges = new THREE.LineSegments(edgeGeo, _edgeMat(col));
-  edges.scale.setScalar(1.004);
-  edges.renderOrder = 1;
-  mesh.add(edges);
-  return mesh;
+  return new THREE.Mesh(geo, _meshMat(col));
 }
 
 // Small native-Three reflection studio. It gives metal hulls readable cool/warm
@@ -190,7 +154,7 @@ function _buildReflectionEnvironment() {
 
   const pmrem = new THREE.PMREMGenerator(_renderer);
   pmrem.compileCubemapShader();
-  _reflectionTarget = pmrem.fromScene(envScene, 0.05, 0.1, 100);
+  _reflectionTarget = pmrem.fromScene(envScene, 0.03, 0.1, 100);
   pmrem.dispose();
   envScene.traverse(obj => {
     if (obj.geometry) obj.geometry.dispose();
@@ -307,8 +271,10 @@ function initScene() {
   _renderer.setSize(W, H);
   _renderer.setClearColor(0x000006, 1);
   _renderer.outputColorSpace = THREE.SRGBColorSpace;
-  _renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  _renderer.toneMappingExposure = 1.15;
+  // Linear preserves saturated faction colours; ACES washed the station's
+  // identity green toward pale mint in the V-001 audit captures.
+  _renderer.toneMapping = THREE.LinearToneMapping;
+  _renderer.toneMappingExposure = 1.0;
 
   _scene = new THREE.Scene();
   _scene.background = _buildNebulaBackground();
