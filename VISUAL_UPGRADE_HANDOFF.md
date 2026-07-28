@@ -13,13 +13,13 @@ for code; this file is the authority for the current review disposition.
   changed files, and verification evidence. The worker does not approve its own work.
 - **Auditor:** reviews the committed diff independently, repeats relevant evidence,
   and records `PASS` or `CHANGES REQUESTED` with blocking findings.
-- **Human gate:** Stephen or Doran records `ACCEPTED`, `REJECTED`, or requested
-  adjustments after seeing the result. Either may accept; explicit contrary feedback
-  from either reopens the item until reconciled.
+- **Operator:** records `ACCEPTED`, `REJECTED`, or requested adjustments after seeing
+  the result. Explicit contrary feedback from the operator reopens the item until
+  reconciled.
 - **Merge gate:** a slice is ready to merge only when the auditor records `PASS`
-  and at least one human records `ACCEPTED`.
+  and the operator records `ACCEPTED`.
 
-Human feedback outranks worker and auditor conclusions. New feedback is appended;
+Operator feedback outranks worker and auditor conclusions. New feedback is appended;
 do not rewrite old verdicts or erase the path by which a decision changed.
 
 ## Status vocabulary
@@ -30,8 +30,8 @@ Use only these labels in the active checklist:
 - `IN PROGRESS` — worker is changing it.
 - `AWAITING AUDIT` — implementation is committed and evidence is recorded.
 - `CHANGES REQUESTED` — auditor or human found a blocker.
-- `AWAITING HUMAN` — auditor passed; Stephen or Doran has not accepted it yet.
-- `ACCEPTED` — auditor passed and Stephen or Doran accepted it.
+- `AWAITING HUMAN` — auditor passed; the operator has not accepted it yet.
+- `ACCEPTED` — auditor passed and the operator accepted it.
 - `REJECTED` — explicitly declined; retained for history.
 - `DEFERRED` — worthwhile, but intentionally outside the current slice.
 
@@ -46,7 +46,7 @@ Use only these labels in the active checklist:
 - [ ] Before and after screenshots are attached or linked.
 - [ ] The worker records expected visual benefit and likely regression risks.
 - [ ] The auditor independently repeats the relevant checks.
-- [ ] Stephen or Doran records an explicit human verdict.
+- [ ] The operator records an explicit verdict.
 
 For performance-sensitive work, also record a repeatable stress scene and frame-time
 comparison. A visual improvement must not hide a material performance regression.
@@ -55,14 +55,14 @@ comparison. A visual improvement must not hide a material performance regression
 
 | ID | Slice | State | Worker evidence | Auditor | Human gate |
 |---|---|---|---|---|---|
-| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING HUMAN` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Stephen 2026-07-27: accepted for live preview. Preview is live and verified at <https://grandbeggar.github.io/voidrunner777/> (build `afa0733`, desktop browser required) — awaiting final visual confirmation |
+| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING HUMAN` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Operator 2026-07-27: accepted for live preview. Preview is live and verified at <https://grandbeggar.github.io/voidrunner777/> (build `afa0733`, desktop browser required) — awaiting final visual confirmation |
 | V-002 | Low-threshold bloom for emissive bullets, particles, and engines | `DEFERRED` | Requires a post-processing pipeline and a measured frame-time budget. Re-audit note: Linear tone mapping leaves ~27% of the station hull region hard-clipped, so bloom will key off far more area than the baseline look implies — revisit tone mapping as part of this slice | — | — |
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
-| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `PROPOSED` | Stephen feedback 2026-07-27; use the Homeworld reference for visual principle, not direct imitation | — | — |
-| V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Stephen feedback 2026-07-27; retain clear target/radar sightlines | — | — |
-| V-008 | Start the player closer to stations, traffic, or other meaningful entities | `PROPOSED` | Stephen feedback 2026-07-27; must remain collision-safe and avoid immediate hostile spawn traps | — | — |
+| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `PROPOSED` | Operator feedback 2026-07-27; use the Homeworld reference for visual principle, not direct imitation | — | — |
+| V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Operator feedback 2026-07-27; retain clear target/radar sightlines | — | — |
+| V-008 | Start the player closer to stations, traffic, or other meaningful entities | `PROPOSED` | Operator feedback 2026-07-27; must remain collision-safe and avoid immediate hostile spawn traps | — | — |
 
 ## Acceptance notes
 
@@ -144,7 +144,7 @@ separate slices to keep this review bounded.
 `bdf456144fd51f393fab4a78f83ef2e1aa34b0ed` against its parent `0446bf3`. Both commits
 were checked out into throwaway git worktrees and served over separate local HTTP
 ports so before/after captures came from identical code paths and the same viewport.
-Doran's unstaged local changes were not touched and were not present in either worktree.
+The operator's unstaged local changes were not touched and were not present in either worktree.
 
 **What was reviewed:** the full V-001 diff. It touches only `src/renderer-threejs.js`
 (+114 / −9), which matches the declared slice — no unrelated files, no scope creep.
@@ -244,7 +244,7 @@ Station hull, same region, same viewport:
 **Verdict:** CHANGES REQUESTED
 
 **Gate transition:** `AWAITING AUDIT` → `CHANGES REQUESTED`. Finding 1 needs a human
-art-direction call from Stephen or Doran; findings 2 and 3 are worker follow-ups.
+art-direction call from the operator; findings 2 and 3 are worker follow-ups.
 
 ### 2026-07-27 — Codex — worker — V-001 changes-requested remediation
 
@@ -369,12 +369,12 @@ Station hull, same fixed 130 × 120 px region and same camera offset as the firs
 **Verdict:** PASS
 
 **Gate transition:** `AWAITING AUDIT` → `AWAITING HUMAN`. Per the merge gate, V-001
-now needs an explicit `ACCEPTED` from Stephen or Doran before it is ready to merge.
+now needs an explicit `ACCEPTED` from the operator before it is ready to merge.
 The specific thing to eyeball is `docs/audit/v-001/09-station-remediated-b238423.png`
 and `10-hull-closeup-remediated-b238423.png`: confirm the station green reads as the
 correct faction identity colour and the nebula stays subordinate to HUD legibility.
 
-### 2026-07-27 — Stephen — human — V-001 live-preview authorization
+### 2026-07-27 — Operator — human — V-001 live-preview authorization
 
 **Branch/commit:** `codex/visual-upgrade-v1` at audited branch tip `c41a312`, containing
 remediation commit `b238423` and the auditor's `PASS` evidence.
@@ -383,7 +383,7 @@ remediation commit `b238423` and the auditor's `PASS` evidence.
 go live"
 
 **Disposition:** accepted for deployment to a browser-accessible preview. This is not
-yet final visual acceptance and does not authorize the upstream merge. Stephen will
+yet final visual acceptance and does not authorize the upstream merge. The operator will
 review the hosted build before the human merge gate closes.
 
 **Verdict:** final `ACCEPTED` pending live review.
@@ -391,7 +391,7 @@ review the hosted build before the human merge gate closes.
 **Gate transition:** none. V-001 remains `AWAITING HUMAN` until the hosted preview is
 reviewed; live-preview deployment is authorized.
 
-### 2026-07-27 — Stephen — human — visual direction reference and next slices
+### 2026-07-27 — Operator — human — visual direction reference and next slices
 
 **Reference:** screenshot from the unrelated Homeworld-style "one shot" project that
 started this review. It is a mood and composition reference only; VOIDRUNNER remains a
@@ -476,7 +476,7 @@ committed as `docs/audit/v-001/11-station-live-preview-afa0733.png`.
    thrust and hides the cursor; there is no touch input path, so the hosted build will
    not be reviewable on a phone or tablet. Worth knowing before opening the link.
 2. Pages serves whatever `codex/visual-upgrade-v1` points at, so any future push to
-   this branch silently republishes. If Stephen's review needs a frozen build, the
+   this branch silently republishes. If the operator's review needs a frozen build, the
    reviewed commit should be pinned or tagged rather than left tracking the branch tip.
 3. The favicon 404 is the only unresolved console noise and is not worth a slice on its
    own; folding it into any later slice that touches `index.html` would be cheapest.
@@ -485,8 +485,31 @@ committed as `docs/audit/v-001/11-station-live-preview-afa0733.png`.
 `b238423` stands and is now confirmed to be what the hosted build actually runs.
 
 **Gate transition:** none. V-001 remains `AWAITING HUMAN`. The live-review precondition
-Stephen set is now satisfied: the changes are live and independently confirmed correct
+the operator set is now satisfied: the changes are live and independently confirmed correct
 at the hosted URL, so the final human verdict is unblocked.
+
+### 2026-07-27 — Claude — auditor — terminology redaction pass
+
+**What changed:** at the operator's instruction, individual names were removed from this
+file and replaced with the role term "operator". This touched prior ledger entries,
+which the append-only rule would normally protect, so it is recorded here rather than
+applied silently. No verdict, gate transition, commit SHA, measurement, or decision path
+was altered — the edit is purely who-is-named, not what-was-decided.
+
+**Scope:** 16 occurrences across this file only; no other tracked file contained the
+names. The `Human gate` column header and the `AWAITING HUMAN` status label were left
+unchanged: both are role-generic rather than personal, and `AWAITING HUMAN` already
+appears in historical gate-transition records, so renaming it would have meant editing
+recorded state history for no privacy benefit.
+
+**Known limitation:** the names persist in already-pushed commit messages, notably
+`c41a312` and `9a43d39`. Removing them would require rewriting and force-pushing
+published history, which is not warranted for a naming change; this entry is the
+correction of record instead.
+
+**Verdict:** n/a — editorial pass.
+
+**Gate transition:** none.
 
 ## Entry template
 
