@@ -169,18 +169,28 @@ function _buildReflectionEnvironment() {
 // primitives would otherwise cost a dozen draw calls each, and the V-001 audit
 // already rejected a change for taking the scene from 62 to 95.
 // Consumes the input geometries — they are disposed here.
+// Carries uv through (so a panel texture has something to sample) and bakes an
+// optional per-part `tint` into a vertex-colour attribute. The tint is what stops a
+// merged station reading as one moulded lump: parts can differ in tone and
+// saturation without costing extra draw calls or extra materials.
+// `uvScale` repeats the panel texture per part so plate size stays roughly even
+// across pieces of very different dimensions.
 function _mergeGeos(parts) {
   const src = parts.map(p => ({
     geo: p.geo.index ? p.geo.toNonIndexed() : p.geo,
     owned: !!p.geo.index,
     orig: p.geo,
     mat: p.mat,
+    tint: p.tint || [1, 1, 1],
+    uvScale: p.uvScale || 1,
   }));
   let total = 0;
   src.forEach(s => { total += s.geo.getAttribute('position').count; });
 
   const pos = new Float32Array(total * 3);
   const nrm = new Float32Array(total * 3);
+  const uvs = new Float32Array(total * 2);
+  const cols = new Float32Array(total * 3);
   const nm = new THREE.Matrix3();
   const v = new THREE.Vector3(), n = new THREE.Vector3();
   let o = 0;
@@ -188,12 +198,15 @@ function _mergeGeos(parts) {
   src.forEach(s => {
     const pa = s.geo.getAttribute('position');
     const na = s.geo.getAttribute('normal');
+    const ua = s.geo.getAttribute('uv');
     nm.getNormalMatrix(s.mat);
     for (let i = 0; i < pa.count; i++) {
       v.fromBufferAttribute(pa, i).applyMatrix4(s.mat);
       pos[o * 3] = v.x; pos[o * 3 + 1] = v.y; pos[o * 3 + 2] = v.z;
       n.fromBufferAttribute(na, i).applyMatrix3(nm).normalize();
       nrm[o * 3] = n.x; nrm[o * 3 + 1] = n.y; nrm[o * 3 + 2] = n.z;
+      if (ua) { uvs[o * 2] = ua.getX(i) * s.uvScale; uvs[o * 2 + 1] = ua.getY(i) * s.uvScale; }
+      cols[o * 3] = s.tint[0]; cols[o * 3 + 1] = s.tint[1]; cols[o * 3 + 2] = s.tint[2];
       o++;
     }
     if (s.owned) s.geo.dispose();
@@ -203,7 +216,89 @@ function _mergeGeos(parts) {
   const out = new THREE.BufferGeometry();
   out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   out.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  out.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  out.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
   return out;
+}
+
+// Panel/plating map for hull surfaces. Deliberately near-greyscale: it multiplies
+// the faction colour rather than replacing it, so plating breaks up the monochrome
+// without shifting hue — the identity-colour failure V-001 was remediated for.
+const _hullTexCache = {};
+function _buildHullTexture() {
+  if (_hullTexCache.tex) return _hullTexCache.tex;
+  const S = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = S; canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const rnd = _seededRand('hull-plating');
+
+  // Base plate tone, then rectangular plates at varying brightness.
+  ctx.fillStyle = '#dcdcdc';
+  ctx.fillRect(0, 0, S, S);
+  for (let i = 0; i < 130; i++) {
+    const w = 24 + rnd() * 108, h = 18 + rnd() * 84;
+    const x = rnd() * S, y = rnd() * S;
+    const g = 186 + Math.floor(rnd() * 69);
+    ctx.fillStyle = `rgba(${g},${g},${g},${0.30 + rnd() * 0.45})`;
+    ctx.fillRect(x, y, w, h);
+  }
+  // Seam grid — the strongest cue that a surface is panelled rather than painted.
+  ctx.strokeStyle = 'rgba(52,56,60,0.42)';
+  ctx.lineWidth = 2;
+  for (let x = 0; x <= S; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, S); ctx.stroke(); }
+  for (let y = 0; y <= S; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke(); }
+  ctx.strokeStyle = 'rgba(78,82,86,0.22)';
+  ctx.lineWidth = 1;
+  for (let x = 32; x <= S; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, S); ctx.stroke(); }
+  for (let y = 32; y <= S; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke(); }
+  // Hazard stripes and dark service blocks for local contrast.
+  for (let i = 0; i < 7; i++) {
+    const x = rnd() * S, y = rnd() * S, w = 40 + rnd() * 70, h = 8 + rnd() * 12;
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rnd() < 0.5 ? 0 : Math.PI / 2);
+    ctx.fillStyle = 'rgba(70,70,74,0.65)'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(215,215,215,0.5)';
+    for (let sx = 0; sx < w; sx += 12) ctx.fillRect(sx, 0, 6, h);
+    ctx.restore();
+  }
+  for (let i = 0; i < 26; i++) {
+    const x = rnd() * S, y = rnd() * S;
+    ctx.fillStyle = `rgba(74,77,82,${0.30 + rnd() * 0.34})`;
+    ctx.fillRect(x, y, 6 + rnd() * 20, 6 + rnd() * 16);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = _renderer.capabilities.getMaxAnisotropy();
+  _hullTexCache.tex = tex;
+  return tex;
+}
+
+// Hull material per faction colour: faction hue on the material, plating in the
+// map, per-part tone in vertex colours.
+// Neutral framework colour shared by every station regardless of faction, so the
+// faction hue reads as paint on a hull rather than as the material of the whole
+// structure. Slightly blue to sit against the warm sun.
+const _STATION_STEEL = '#8d969e';
+
+const _hullMatCache = {};
+function _hullMat(col) {
+  if (!_hullMatCache[col]) {
+    const c = new THREE.Color(col);
+    _hullMatCache[col] = new THREE.MeshStandardMaterial({
+      color: c,
+      map: _buildHullTexture(),
+      vertexColors: true,
+      emissive: c.clone().multiplyScalar(0.06),
+      metalness: 0.62,
+      roughness: 0.52,
+      envMapIntensity: 1.15,
+    });
+  }
+  return _hullMatCache[col];
 }
 
 // ── PROCEDURAL STATIONS ──────────────────────────────────────
@@ -236,38 +331,47 @@ function _windowMat(col) {
 
 function _buildStationGroup(col) {
   const group = new THREE.Group();
-  const parts = [];
   const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
-  const push = (geo, mat) => parts.push({ geo, mat: mat || new THREE.Matrix4() });
 
-  // Central spine and the docking drum riding on it.
-  push(new THREE.CylinderGeometry(15, 15, 150, 8, 1));
-  push(new THREE.CylinderGeometry(30, 30, 46, 8, 1));
-  push(new THREE.CylinderGeometry(34, 26, 16, 8, 1), T(0, 30, 0));
-  push(new THREE.CylinderGeometry(26, 34, 16, 8, 1), T(0, -30, 0));
+  // Two material groups rather than one. Vertex colours multiply, so a grey tint on
+  // a saturated hull can only darken it — it cannot desaturate it, and the station
+  // stays one hue. Genuine two-tone needs a second, neutral material, which costs
+  // one extra draw call per station and is what actually breaks the monochrome.
+  const hull = [], steel = [];
+  const pushH = (geo, mat, tint, uvScale) =>
+    hull.push({ geo, mat: mat || new THREE.Matrix4(), tint, uvScale });
+  const pushS = (geo, mat, tint, uvScale) =>
+    steel.push({ geo, mat: mat || new THREE.Matrix4(), tint, uvScale });
 
-  // Habitat ring in the XZ plane, so Y rotation spins it correctly.
-  const ring = new THREE.TorusGeometry(92, 12, 8, 28);
-  push(ring, new THREE.Matrix4().makeRotationX(Math.PI / 2));
+  // Within-group tone variation, on top of the two base colours.
+  const PLATE  = [0.94, 0.96, 0.98];
+  const ACCENT = [1.16, 1.08, 0.90];
+  const FRAME  = [0.86, 0.90, 0.94];
+  const DARK   = [0.46, 0.49, 0.53];
 
-  // Spokes out to the ring.
+  // Faction-coloured: habitat drum, collars, ring, docking pylons.
+  pushH(new THREE.CylinderGeometry(30, 30, 46, 8, 1), null, PLATE, 3);
+  pushH(new THREE.CylinderGeometry(34, 26, 16, 8, 1), T(0, 30, 0), ACCENT, 2);
+  pushH(new THREE.CylinderGeometry(26, 34, 16, 8, 1), T(0, -30, 0), ACCENT, 2);
+  pushH(new THREE.TorusGeometry(92, 12, 8, 28),
+        new THREE.Matrix4().makeRotationX(Math.PI / 2), PLATE, 6);
+  pushH(new THREE.BoxGeometry(46, 12, 12), T(0, 84, 0), ACCENT, 2);
+  pushH(new THREE.BoxGeometry(12, 12, 46), T(0, -84, 0), ACCENT, 2);
+
+  // Neutral structural steel: spine, spokes, masts.
+  pushS(new THREE.CylinderGeometry(15, 15, 150, 8, 1), null, FRAME, 3);
   for (let i = 0; i < 4; i++) {
     const a = (i / 4) * Math.PI * 2;
     const m = new THREE.Matrix4()
       .makeRotationY(-a)
-      .multiply(new THREE.Matrix4().makeTranslation(0, 0, 46))
-      .multiply(new THREE.Matrix4().makeScale(1, 1, 1));
-    push(new THREE.BoxGeometry(9, 9, 92), m);
+      .multiply(new THREE.Matrix4().makeTranslation(0, 0, 46));
+    pushS(new THREE.BoxGeometry(9, 9, 92), m, FRAME, 2);
   }
+  pushS(new THREE.CylinderGeometry(2.5, 2.5, 54, 5), T(38, 52, 0), DARK, 1);
+  pushS(new THREE.CylinderGeometry(2.5, 2.5, 54, 5), T(-38, -52, 0), DARK, 1);
 
-  // Docking pylons at each pole, and a pair of masts for silhouette interest.
-  push(new THREE.BoxGeometry(46, 12, 12), T(0, 84, 0));
-  push(new THREE.BoxGeometry(12, 12, 46), T(0, -84, 0));
-  push(new THREE.CylinderGeometry(2.5, 2.5, 54, 5), T(38, 52, 0));
-  push(new THREE.CylinderGeometry(2.5, 2.5, 54, 5), T(-38, -52, 0));
-
-  const structure = new THREE.Mesh(_mergeGeos(parts), _meshMat(col));
-  group.add(structure);
+  group.add(new THREE.Mesh(_mergeGeos(hull), _hullMat(col)));
+  group.add(new THREE.Mesh(_mergeGeos(steel), _hullMat(_STATION_STEEL)));
 
   // Windows: one InstancedMesh, so the whole lit band is a single draw call.
   const winGeo = new THREE.BoxGeometry(7, 3.2, 3.2);
