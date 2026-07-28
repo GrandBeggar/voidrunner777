@@ -78,6 +78,10 @@ function init(){
 
   G.asteroids = buildAsteroids(G.pBases);
 
+  // Opening position — needs G.planets/stations/asteroids, and must be set before
+  // the spawn block below so station traffic is placed relative to the real start.
+  G.p.pos = placeOpeningSpawn();
+
   // Calculate derived physics from equipment
   calcPlayerPhysics(G.p);
   for(let i=0;i<500;i++){
@@ -119,6 +123,55 @@ function init(){
 }
 
 function pickStation(){ return G.stations[Math.floor(Math.random()*G.stations.length)]; }
+
+// ── OPENING SPAWN PLACEMENT ──────────────────────────────────
+// The player used to start at the system origin, ~6000u from the nearest station
+// with nothing recognisable on screen. Start just off a lawful station instead,
+// backed off along -Z so the identity start orientation looks straight at it and
+// the station, its planet, and station traffic are all in frame at t=0.
+// Computed rather than hardcoded so it stays outside every hazard radius the HUD
+// alarms on even if a system's layout changes.
+const SPAWN_BACK=750;       // distance behind the station along the view axis
+const SPAWN_LATERAL=250;    // nudge away from the station's parent planet
+const SPAWN_STEP=250;       // push-back increment when a hazard is too close
+const SPAWN_TRIES=12;
+const SPAWN_CLEAR=200;      // margin beyond each hazard's own alarm radius
+const SPAWN_MAX_VIEW=2200;  // past this the station stops reading as a landmark
+
+// Hazard radii mirror the alarms in player.js: planet atmosphere warns at
+// r*1.08*2.5, station proximity at 350, asteroid proximity at r*2.5.
+function spawnPosClear(pos, target){
+  for(const pl of G.planets)
+    if(v3len(v3sub(pl.pos,pos)) < pl.r*1.08*2.5 + SPAWN_CLEAR) return false;
+  for(const st of G.stations)
+    if(v3len(v3sub(st.pos,pos)) < 350 + SPAWN_CLEAR) return false;
+  for(const ast of G.asteroids||[])
+    if(v3len(v3sub(ast.pos,pos)) < ast.r*2.5 + SPAWN_CLEAR) return false;
+  for(const pb of G.pBases)
+    if(v3len(v3sub(pb.pos,pos)) < 4000) return false;  // no hostile spawn trap
+  return v3len(v3sub(target.pos,pos)) <= SPAWN_MAX_VIEW;
+}
+
+function placeOpeningSpawn(){
+  const target = G.stations.find(st=>FACTIONS[st.factionId]?.cat!=='criminal') || G.stations[0];
+  if(!target) return v3(0,0,0);
+  // Lateral nudge points away from whichever planet this station orbits, so the
+  // backed-off position clears the atmosphere warning ring instead of skimming it.
+  let away=v3(0,0,0), best=Infinity;
+  G.planets.forEach(pl=>{
+    const d=v3len(v3sub(target.pos,pl.pos));
+    if(d>1 && d<best){ best=d; away=v3norm(v3sub(target.pos,pl.pos)); }
+  });
+  for(let i=0;i<SPAWN_TRIES;i++){
+    const pos=v3(
+      target.pos.x + away.x*SPAWN_LATERAL,
+      target.pos.y + away.y*SPAWN_LATERAL,
+      target.pos.z + away.z*SPAWN_LATERAL - (SPAWN_BACK + i*SPAWN_STEP)
+    );
+    if(spawnPosClear(pos,target)) return pos;
+  }
+  return v3(0,0,0);  // nothing clear — fall back to the legacy origin
+}
 
 // ── ASTEROID FIELDS ──────────────────────────────────────────
 // Generates 4-6 large rocky asteroids clustered around each pirate base.
