@@ -213,7 +213,10 @@ function _buildPlanetTexture(pl) {
   // base, or a blue world reads as blue-on-blue. Blend toward a fixed green-ochre
   // rather than rotating hue: rotation by a fixed angle sends blue to magenta and
   // costs the planet its identity colour, whereas blending cannot overshoot.
-  const land = base.clone().lerp(new THREE.Color().setRGB(0.42, 0.55, 0.30), 0.65);
+  const land = base.clone().lerp(new THREE.Color().setRGB(0.44, 0.57, 0.29), 0.74);
+  // Terrestrial water is darkened so land reads against it. Without this the two
+  // sit at similar luminance and the coastline disappears under the cloud deck.
+  const seaMul = (pl.r > 150 && pl.r < 400) ? 0.80 : 1.0;
 
   // Latitude banding — a vertical gradient, therefore seamless in u by construction.
   const stops = isGas ? 22 : 10;
@@ -223,17 +226,17 @@ function _buildPlanetTexture(pl) {
     const t = i / stops;
     // Slight limb darkening toward both poles keeps the sphere reading as round.
     const polar = 1 - 0.14 * Math.pow(Math.abs(t * 2 - 1), 2.2);
-    grad.addColorStop(t, css((1 + (rnd() - 0.5) * 2 * amp) * polar));
+    grad.addColorStop(t, css((1 + (rnd() - 0.5) * 2 * amp) * polar * seaMul));
   }
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, W, H);
 
   // Large-scale breakup: continents, storms, or crater mottle depending on type.
-  const blobs   = isGas ? 7 : (isMoon ? 34 : 22);
+  const blobs   = isGas ? 7 : (isMoon ? 34 : 14);
   const stretch = isGas ? 2.6 : 1.0;   // gas storms elongate along the bands
   for (let i = 0; i < blobs; i++) {
     const cx = rnd() * W, cy = rnd() * H;
-    const r  = isMoon ? 12 + rnd() * 30 : (isGas ? 40 + rnd() * 70 : 50 + rnd() * 135);
+    const r  = isMoon ? 12 + rnd() * 30 : (isGas ? 40 + rnd() * 70 : 38 + rnd() * 92);
     const m  = isMoon ? 0.72 + rnd() * 0.42 : (isGas ? 0.70 + rnd() * 0.54 : 0.80 + rnd() * 0.45);
     // Terrestrial blobs are land; gas and moon blobs stay tonal on the base hue.
     const c  = (!isGas && !isMoon) ? land : base;
@@ -243,8 +246,11 @@ function _buildPlanetTexture(pl) {
       ctx.translate(cx + off, cy);
       ctx.scale(stretch, 1);
       const g2 = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      // Terrestrial land holds its alpha most of the way out then drops fast, so
+      // coastlines read as edges. Gas and moon features stay soft.
+      const hard = (!isGas && !isMoon);
       g2.addColorStop(0, cssOf(c, m, a0));
-      g2.addColorStop(0.62, cssOf(c, m, a0 * 0.45));
+      g2.addColorStop(hard ? 0.80 : 0.62, cssOf(c, m, a0 * (hard ? 0.78 : 0.45)));
       g2.addColorStop(1, cssOf(c, m, 0));
       ctx.fillStyle = g2;
       ctx.fillRect(-r, -r, r * 2, r * 2);
@@ -273,6 +279,131 @@ function _buildPlanetTexture(pl) {
   tex.magFilter = THREE.LinearFilter;
   tex.anisotropy = _renderer.capabilities.getMaxAnisotropy();
   return tex;
+}
+
+// Cloud deck for terrestrial worlds. Kept as its own texture on its own shell so
+// land, water, and cloud read as three separate layers rather than one painted
+// surface — the shell sits slightly proud of the planet, so it also parallaxes
+// against the terrain at the limb.
+function _buildCloudTexture(pl) {
+  const W = 1024, H = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const rnd = _seededRand('cloud:' + String(pl.name || pl.col));
+
+  // Clouds streak along latitudes, so blobs are wider than tall. Drawn at -W, 0
+  // and +W for the same seam reason as the surface map.
+  // Deliberately sparse. A dense deck blankets the surface and destroys exactly the
+  // land/water separation the layer is meant to sit above; discrete systems over
+  // visible ground read as three layers, a blanket reads as one hazy ball.
+  const puffs = 24;
+  for (let i = 0; i < puffs; i++) {
+    const cx = rnd() * W;
+    // Bias away from the poles — equatorial and mid-latitude bands, not caps.
+    const cy = H * (0.12 + rnd() * 0.76);
+    const r  = 18 + rnd() * 46;
+    const a  = 0.14 + rnd() * 0.30;
+    const wide = 1.8 + rnd() * 1.7;
+    for (const off of [-W, 0, W]) {
+      ctx.save();
+      ctx.translate(cx + off, cy);
+      ctx.scale(wide, 1);
+      const g = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      g.addColorStop(0, `rgba(255,255,255,${a})`);
+      g.addColorStop(0.5, `rgba(255,255,255,${a * 0.45})`);
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(-r, -r, r * 2, r * 2);
+      ctx.restore();
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = _renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+// Atmospheric rim halo. The previous shell was a flat 10% tint over the whole
+// sphere, which reads as haze rather than atmosphere. A Fresnel term concentrates
+// it at the limb instead, and weighting by the sun direction keeps the lit edge
+// bright while the night edge only carries a trace — which is what actually sells
+// the effect. Additive so it glows against the backdrop.
+const _ATMO_VERT = `
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
+varying vec3 vCenter;
+void main() {
+  vec4 wp = modelMatrix * vec4(position, 1.0);
+  vWorldPos = wp.xyz;
+  // The shell's own origin is the planet centre, so no uniform is needed and
+  // orbiting planets stay correct without per-frame updates.
+  vCenter = (modelMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+  vWorldNormal = normalize(mat3(modelMatrix) * normal);
+  gl_Position = projectionMatrix * viewMatrix * wp;
+}`;
+
+// Driven by the view ray's impact parameter — its closest approach to the planet
+// centre — rather than a Fresnel term on the shell. A Fresnel rim peaks at the
+// *shell's* silhouette, which puts the brightest ring at the outer edge of the
+// glow with a hard cutoff: measurably backwards. Impact parameter peaks at the
+// planet's own limb and decays outward, which is how an atmosphere actually reads.
+const _ATMO_FRAG = `
+uniform vec3 uColor;
+uniform vec3 uSunDir;
+uniform float uRadius;
+uniform float uShell;
+uniform float uFalloff;
+uniform float uStrength;
+varying vec3 vWorldNormal;
+varying vec3 vWorldPos;
+varying vec3 vCenter;
+void main() {
+  vec3 rd = normalize(vWorldPos - cameraPosition);
+  vec3 oc = vCenter - cameraPosition;
+  float tca = dot(oc, rd);
+  float impact = sqrt(max(dot(oc, oc) - tca * tca, 0.0));
+
+  // Zero inside the planet disc so the near hemisphere cannot fog the surface,
+  // rising to full at the limb, then decaying to nothing at the shell edge.
+  float inner = smoothstep(uRadius * 0.72, uRadius * 1.02, impact);
+  float outer = 1.0 - smoothstep(uRadius, uShell, impact);
+  float band = inner * pow(clamp(outer, 0.0, 1.0), uFalloff);
+
+  float day = clamp(dot(normalize(vWorldNormal), normalize(uSunDir)), 0.0, 1.0);
+  float amt = band * (0.15 + 0.85 * day) * uStrength;
+  gl_FragColor = vec4(uColor * amt, amt);
+}`;
+
+function _buildAtmosphereMaterial(col, strength, radius, shell) {
+  // Directional light, so the sun is a direction rather than a place.
+  const sd = _sun ? _sun.position.clone().normalize() : new THREE.Vector3(0, 0.12, 1).normalize();
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uColor:    { value: col.clone() },
+      uSunDir:   { value: sd },
+      uRadius:   { value: radius },
+      uShell:    { value: shell },
+      uFalloff:  { value: 2.8 },
+      uStrength: { value: strength },
+    },
+    vertexShader: _ATMO_VERT,
+    fragmentShader: _ATMO_FRAG,
+    // FrontSide, not BackSide. On the far hemisphere the normals point away from
+    // the camera, so the Fresnel term collapses to zero across the whole annulus
+    // and only a razor-thin silhouette line survives — measured as invisible. The
+    // near hemisphere gives rim≈0 dead centre (so it does not fog the disc) rising
+    // to rim≈1 at the edge, which is the halo we actually want.
+    side: THREE.FrontSide,
+    blending: THREE.AdditiveBlending,
+    transparent: true,
+    depthWrite: false,
+  });
 }
 
 // Low-contrast equirectangular backdrop: enough colour variation to establish
@@ -591,19 +722,34 @@ function initSceneForSystem(G) {
     sphere.position.set(pl.pos.x, pl.pos.y, pl.pos.z);
     _planetGroup.add(sphere);
 
-    // Atmosphere shell — BackSide so it's visible from outside
-    const glowGeo = new THREE.SphereGeometry(pl.r * 1.08, 24, 16);
-    const glowMat = new THREE.MeshBasicMaterial({
-      color: col,
-      transparent: true, opacity: 0.10,
-      side: THREE.BackSide,
-    });
-    const glow = new THREE.Mesh(glowGeo, glowMat);
+    // Cloud deck — terrestrial only. Gas giants are already all cloud, and an
+    // airless moon should not have one.
+    let cloud = null;
+    if (pl.r > 150 && pl.r < 400) {
+      const cloudGeo = new THREE.SphereGeometry(pl.r * 1.015, 48, 32);
+      const cloudMat = new THREE.MeshStandardMaterial({
+        map: _buildCloudTexture(pl),
+        transparent: true,
+        depthWrite: false,
+        roughness: 1.0,
+        metalness: 0.0,
+      });
+      cloud = new THREE.Mesh(cloudGeo, cloudMat);
+      cloud.position.set(pl.pos.x, pl.pos.y, pl.pos.z);
+      _planetGroup.add(cloud);
+    }
+
+    // Atmosphere rim — BackSide so only the annulus outside the planet shows.
+    // Airless moons get a much fainter trace than worlds with real atmosphere.
+    const shellR = pl.r * 1.30;
+    const glowGeo = new THREE.SphereGeometry(shellR, 48, 32);
+    const glow = new THREE.Mesh(glowGeo,
+      _buildAtmosphereMaterial(col, pl.r <= 150 ? 0.30 : 1.20, pl.r, shellR));
     glow.position.set(pl.pos.x, pl.pos.y, pl.pos.z);
     _planetGroup.add(glow);
 
     // Store mesh refs on orbiting planets so drawFrame can update their position
-    if (pl.orbitCenter) { pl._mesh = sphere; pl._glowMesh = glow; }
+    if (pl.orbitCenter) { pl._mesh = sphere; pl._glowMesh = glow; pl._cloudMesh = cloud; }
   });
 
   // Asteroids
@@ -666,6 +812,7 @@ function drawFrame(G, dt) {
     if (pl._mesh) {
       pl._mesh.position.set(pl.pos.x, pl.pos.y, pl.pos.z);
       if (pl._glowMesh) pl._glowMesh.position.set(pl.pos.x, pl.pos.y, pl.pos.z);
+      if (pl._cloudMesh) pl._cloudMesh.position.set(pl.pos.x, pl.pos.y, pl.pos.z);
     }
   });
 
