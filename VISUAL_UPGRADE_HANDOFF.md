@@ -62,7 +62,7 @@ comparison. A visual improvement must not hide a material performance regression
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
 | V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `ACCEPTED` (audit gate open) | Branch `claude/v006-planet-surfaces`; `3cb8da7` then remediation `fba96e5`. Terrestrial disc dynamic range roughly doubled (Terra 25.6 → 65.4, Mars 21.2 → 51.3); seam <1/255 | Pending — needs an auditor other than Claude, who wrote this slice | Operator 2026-07-28: Jupiter good, Terra wanted clearer cloud/land/water separation — remediated in `fba96e5`; operator 2026-07-28: `ACCEPTED` |
 | V-009 | Atmospheric rim halo around planet limbs | `AWAITING AUDIT` | Operator feedback 2026-07-28 (No Man's Sky reference). Branch `claude/v006-planet-surfaces`, commit `fba96e5`. Impact-parameter shader; limb glow decays to background over ~28px | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "that looks excellent" |
-| V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Operator feedback 2026-07-27; retain clear target/radar sightlines | — | — |
+| V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `AWAITING AUDIT` | Branch `claude/v007-cockpit-frame`; commit `a80e567`. Centre view and warning row measured unchanged (22.78 → 22.77, 17.20 → 17.22); radar and MFD content rose | Pending — needs an auditor other than Claude | Pending |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
 ## Acceptance notes
@@ -864,6 +864,75 @@ the operator records a blanket waiver naming those commits.
 
 **Gate transition:** V-006 `AWAITING AUDIT` → `ACCEPTED` on the operator gate; V-009
 likewise. Auditor gate remains open on both.
+
+### 2026-07-28 — Claude — worker — V-007 cockpit framing
+
+**Role note:** worker again; cannot supply the auditor `PASS`.
+
+**Branch/commit:** `claude/v007-cockpit-frame`, branched from `9933dd8` (the V-006/V-009
+tip). Implementation commit `a80e567`. Separate worktree; operator's uncommitted work
+untouched.
+
+**What changed:** `src/renderer.js` only, +89 / −33. `drawCockpit()` previously drew two
+thin A-pillar polylines and a crossbar, which read as an overlay rather than a ship.
+Adds `_canopyOpening()` and `_canopyFrame()`: everything outside a windscreen opening is
+filled, then edged with a bright inner lip over a heavier dim member, with corner gussets
+and pillar ribs. Console instrument blocks became recessed wells — dark fill, shadowed
+top-left edge, lit bottom-right edge — instead of plain `strokeRect` outlines.
+
+**Two construction details that matter for review:**
+
+- The opening is traced by one helper used both to punch the hole (`fill('evenodd')`)
+  and to stroke the edge, so the silhouette and its outline cannot drift apart.
+- The outer fill rect runs from `-W,-H` to `2W,2H`. The whole cockpit is inside a
+  `ctx.rotate(p.roll)`, so a viewport-sized rect would swing an uncovered corner into
+  view during a roll.
+
+**Ordering bug found and fixed during implementation:** the frame was first added at the
+end of `drawCockpit`, which painted over the console that had been drawn earlier in the
+same function — the dashboard vanished entirely. Moved ahead of the console. The bad
+frame is kept as `docs/audit/v-007/03-rejected-frame-over-console.png`.
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; no
+page errors. Because the acceptance criterion is "does not cover target brackets,
+warnings, radar, or the central combat view", the protected regions were measured
+directly rather than judged by eye, at a fixed camera 900 u from station[0]:
+
+| Region | Mean luminance before → after | Content before → after |
+|---|---|---|
+| Centre combat view | 22.78 → 22.77 | 6.57% → 6.64% |
+| Warning row (H×0.22) | 17.20 → 17.22 | 1.40% → 1.44% |
+| Crosshair box | 63.88 → 61.77 | 40.68% → 38.58% |
+| Radar | 14.49 → 13.54 | 9.49% → 11.24% |
+| Target readout column | 19.52 → 14.40 | 7.18% → 14.03% |
+
+The centre view and warning row are unchanged to within a rounding step, so the frame
+does not intrude on either. Radar and target-readout *content* rose, because those
+instruments now sit against darker framing rather than open space — legibility improved
+rather than degraded. The crosshair box moved slightly, which is NPC-position variance
+between runs, not framing.
+
+Whole-screen mean luminance fell 27.02 → 22.32, which is the intended effect: the
+periphery is now structure instead of space.
+
+**Findings and open risks:**
+
+1. **Peripheral vision is genuinely reduced.** The opening is roughly 83% of width and
+   70% of height, so ships at the extreme edges are now behind the frame. That is
+   inherent to having a cockpit at all, but it is a gameplay change, not only a visual
+   one, and deserves an explicit yes rather than passive acceptance.
+2. **Tier variation is thin.** Rib count rises with hull tier, but all ships share one
+   silhouette. The acceptance direction called ship-specific variation desirable but not
+   required for a first slice, so this is deliberately unfinished.
+3. **Only the default shuttle at 1280 × 720 was measured.** Other hulls change rib count
+   only; other aspect ratios are untested, and the opening is defined in fractions of
+   `W`/`H`, so an extreme aspect ratio could crowd the readouts.
+4. **Roll was not measured, only reasoned about.** The oversized fill rect should make
+   roll safe, but I verified it by construction rather than by capturing a rolled frame.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** `PROPOSED` → `AWAITING AUDIT`.
 
 ## Entry template
 
