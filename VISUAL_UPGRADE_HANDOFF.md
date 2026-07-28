@@ -62,7 +62,10 @@ comparison. A visual improvement must not hide a material performance regression
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
 | V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `ACCEPTED` (audit gate open) | Branch `claude/v006-planet-surfaces`; `3cb8da7` then remediation `fba96e5`. Terrestrial disc dynamic range roughly doubled (Terra 25.6 → 65.4, Mars 21.2 → 51.3); seam <1/255 | Pending — needs an auditor other than Claude, who wrote this slice | Operator 2026-07-28: Jupiter good, Terra wanted clearer cloud/land/water separation — remediated in `fba96e5`; operator 2026-07-28: `ACCEPTED` |
 | V-009 | Atmospheric rim halo around planet limbs | `AWAITING AUDIT` | Operator feedback 2026-07-28 (No Man's Sky reference). Branch `claude/v006-planet-surfaces`, commit `fba96e5`. Impact-parameter shader; limb glow decays to background over ~28px | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "that looks excellent" |
-| V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `AWAITING AUDIT` | Branch `claude/v007-cockpit-frame`; commit `a80e567`. Centre view and warning row measured unchanged (22.78 → 22.77, 17.20 → 17.22); radar and MFD content rose | Pending — needs an auditor other than Claude | Pending |
+| V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `ACCEPTED` (parked) | Branch `claude/v007-cockpit-frame`; commit `a80e567`. Centre view and warning row measured unchanged (22.78 → 22.77, 17.20 → 17.22) | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "ya this is fine", but HUD treated as placeholder pending upstream direction |
+| V-010 | Stations as assembled structures instead of convex-hull blobs | `AWAITING AUDIT` | Branch `claude/v010-station-structure`; commit `78d5abe`. Spawn-view cost 74 → 78 draw calls, 22490 → 25716 tris | Pending — needs an auditor other than Claude | Pending |
+| V-011 | NPC and player ship hulls — same convex-hull flattening as stations | `PROPOSED` | Not started. `_modelToMesh` discards all concavity; ships read as faceted shards at close range | — | — |
+| V-012 | Cargo containers, asteroids, pirate bases and landing zones | `PROPOSED` | Not started. Cargo is a bare `BoxGeometry`; pirate bases still use the convex hull | — | — |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
 ## Acceptance notes
@@ -957,6 +960,96 @@ is a one-line change there, and this frame is already built to survive it.
 **Verdict:** n/a — correction to a worker entry.
 
 **Gate transition:** none.
+
+### 2026-07-28 — Operator — human — V-007 accepted, focus redirected to 3D space
+
+**Operator feedback, verbatim:** "ya this is fine, but let's focus on all of the space
+elements first - I think the hud is just a place holder, and may require some nicer
+rendering.. but im not sure what Dimman wants there, so let's just focus on what we know
+is roughly rendered place holders in the actual 3d space"
+
+**Disposition:** V-007 `ACCEPTED` but parked. The HUD is regarded as placeholder work
+whose direction belongs to the upstream owner, so no further HUD slices should be opened
+speculatively. V-004 (camera motion polish) is HUD-adjacent and should be treated as
+parked for the same reason until direction exists.
+
+**New direction:** prioritise geometry that is obviously placeholder *in the 3D scene*.
+Registered as V-010 (stations), V-011 (ship hulls) and V-012 (cargo, asteroids, pirate
+bases, landing zones), in that order — stations first because the player now spawns
+795 u from one, making it the most-looked-at object in the game.
+
+**Gate transition:** V-007 `AWAITING AUDIT` → `ACCEPTED`, then parked. V-010, V-011 and
+V-012 enter the checklist.
+
+### 2026-07-28 — Claude — worker — V-010 station structure
+
+**Role note:** worker; cannot supply the auditor `PASS`.
+
+**Branch/commit:** `claude/v010-station-structure`, branched from `1a029ec`.
+Implementation commit `78d5abe`. Separate worktree; operator's uncommitted work untouched.
+
+**The actual defect:** `mkStation()` in `src/data-models.js` is an 8-sided drum of 18
+vertices, and `_convexHullGeo()` then discards everything concave about it. Every station
+in the game was therefore a faceted ball. The model was never the problem — the convex
+hull was, and no amount of model authoring survives it.
+
+**What changed:** `src/renderer-threejs.js` only, +140 / −2. Stations now build an
+assembled structure: central spine, docking drum with tapered collars, habitat ring, four
+spokes, polar docking pylons, two masts, and an emissive window band. Built around +Y
+because `drawFrame` already spins stations on `rAngle` about Y — so the ring turns in its
+own plane instead of tumbling end over end. Outer radius is ~105 u, chosen to stay well
+inside the 220 u landing-zone ring built by `buildLandingZones`.
+
+**Draw-call discipline, because there is precedent.** The V-001 audit rejected a change
+for taking the scene 62 → 95 draw calls, so a station made of a dozen separate meshes was
+not acceptable. `BufferGeometryUtils` exists only in the module build this file does not
+load, so `_mergeGeos()` is hand-rolled: it bakes each primitive's matrix into position and
+normal data and concatenates. Structure collapses to one draw call and the windows are a
+single `InstancedMesh`, so a station costs two.
+
+| | Before | After |
+|---|---|---|
+| Spawn-view draw calls | 74 | 78 |
+| Spawn-view triangles | 22490 | 25716 |
+| Close-view draw calls | 65 | 67 |
+| Geometries resident | 74 | 78 |
+
+Four visible stations for four extra calls. **No frame-time claim:** the median frame was
+16.7 ms both before and after, which is vsync on software rendering and carries no
+information either way.
+
+**A disposal trap I walked into and backed out of.** My first version cached station
+geometry per faction colour. `initSceneForSystem` disposes station children by traversal,
+so the cache would have been freed out from under the next system load — jumping to
+another system and back would have rendered nothing. Stations now build their own
+geometry; two geometries per station, once per system change, is nothing against that
+class of bug.
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; the
+only console output is the pre-existing `favicon.ico` 404. Captures in
+`docs/audit/v-010/`, before and after at identical cameras.
+
+**Findings and open risks:**
+
+1. **`st.model` now feeds two divergent representations.** The 3D view ignores it; the 2D
+   MFD and radar wireframes in `canvas.js` still draw it. The wireframe silhouette on the
+   targeting display therefore no longer matches the 3D station. Deliberate — rewriting
+   the MFD is out of scope — but it is a real inconsistency an auditor should weigh.
+2. **Pirate bases were left alone.** They use the same convex-hull path and are still
+   blobs. Keeping this slice to stations makes it reviewable; pirate bases should get the
+   same treatment with a distinct silhouette, not a recolour. Logged under V-012.
+3. **One silhouette for every station.** Faction identity is still carried only by colour.
+   Type-specific variation (refinery, agricultural, military) is the natural follow-up.
+4. **Window brightness is unmeasured.** The emissive band is set by eye at intensity 1.6.
+   It should be checked against V-002, since bloom would key off it hard.
+5. **Collision and docking are unchanged** — `dockR` 220 and the 350 u proximity alarm are
+   game-state values this slice does not touch. But the station now *looks* bigger than
+   the old blob, so the docking radius may feel wrong even though it is numerically
+   identical.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** `PROPOSED` → `AWAITING AUDIT`.
 
 ## Entry template
 
