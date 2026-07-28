@@ -55,7 +55,7 @@ comparison. A visual improvement must not hide a material performance regression
 
 | ID | Slice | State | Worker evidence | Auditor | Human gate |
 |---|---|---|---|---|---|
-| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING HUMAN` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Stephen 2026-07-27: accepted for live preview; final visual confirmation pending hosted review |
+| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING HUMAN` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Stephen 2026-07-27: accepted for live preview. Preview is live and verified at <https://grandbeggar.github.io/voidrunner777/> (build `afa0733`, desktop browser required) — awaiting final visual confirmation |
 | V-002 | Low-threshold bloom for emissive bullets, particles, and engines | `DEFERRED` | Requires a post-processing pipeline and a measured frame-time budget. Re-audit note: Linear tone mapping leaves ~27% of the station hull region hard-clipped, so bloom will key off far more area than the baseline look implies — revisit tone mapping as part of this slice | — | — |
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
@@ -431,6 +431,62 @@ them into one implementation or treat the Homeworld screenshot as a pixel target
 human feedback is pending.
 
 **Gate transition:** none. V-006, V-007, and V-008 enter the checklist as `PROPOSED`.
+
+### 2026-07-27 — Claude — auditor — V-001 live preview verification
+
+**Live preview:** <https://grandbeggar.github.io/voidrunner777/>
+
+**Branch/commit:** GitHub Pages on the `GrandBeggar` fork was already enabled and
+configured to serve `codex/visual-upgrade-v1` from the repository root. The most recent
+successful build is `afa0733`, which is the current branch tip, so the hosted build is
+current rather than stale. The fork was already public, so publishing exposed nothing
+that was not already readable.
+
+**What was verified:** that the *hosted* build actually serves the remediated V-001
+renderer. A hosted build differs from the local one in three ways that could each mask a
+regression — HTTPS rather than plain HTTP, a `/voidrunner777/` subpath rather than root,
+and a jsDelivr CDN fetch for Three.js — so the local `PASS` does not automatically carry
+over and was re-checked against the live site rather than assumed.
+
+**Evidence:** loaded the live URL headless at 1280 × 720, started a game, and read the
+renderer state actually in effect:
+
+| Property | Live value | Meaning |
+|---|---|---|
+| `_renderer.toneMapping` | `1` | `LinearToneMapping` — the remediation. ACES would be `4` |
+| `_renderer.toneMappingExposure` | `1.0` | remediated exposure |
+| `_renderer.outputColorSpace` | `srgb` | retained |
+| `_scene.environment` | present | reflection environment retained |
+| `_scene.background` | present | nebula retained |
+| `THREE.REVISION` | `160` | CDN served the expected build |
+
+Station hull, same fixed region and camera offset as both prior audits: mean RGB
+23.8 / 155.1 / 125.9, mean saturation **0.823** — consistent with the local `b238423`
+reading of 0.833 within spawn and render variance, and decisively not the ACES value of
+0.632. The live build is the remediated one, confirmed by two independent signals.
+
+HTTP 200; 0 page errors; 0 failed requests; 0 PMREM `sigmaRadians` warnings. The only
+console output is the pre-existing Three.js global-build deprecation warning (tracked as
+V-003) and a `favicon.ico` 404, which is cosmetic and pre-existing. Live capture is
+committed as `docs/audit/v-001/11-station-live-preview-afa0733.png`.
+
+**Findings and open risks:**
+
+1. The preview needs a **desktop browser**. VOIDRUNNER uses mouse aim plus keyboard
+   thrust and hides the cursor; there is no touch input path, so the hosted build will
+   not be reviewable on a phone or tablet. Worth knowing before opening the link.
+2. Pages serves whatever `codex/visual-upgrade-v1` points at, so any future push to
+   this branch silently republishes. If Stephen's review needs a frozen build, the
+   reviewed commit should be pinned or tagged rather than left tracking the branch tip.
+3. The favicon 404 is the only unresolved console noise and is not worth a slice on its
+   own; folding it into any later slice that touches `index.html` would be cheapest.
+
+**Verdict:** n/a — deployment verification, not a code audit. The prior `PASS` on
+`b238423` stands and is now confirmed to be what the hosted build actually runs.
+
+**Gate transition:** none. V-001 remains `AWAITING HUMAN`. The live-review precondition
+Stephen set is now satisfied: the changes are live and independently confirmed correct
+at the hosted URL, so the final human verdict is unblocked.
 
 ## Entry template
 
