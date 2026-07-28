@@ -60,7 +60,8 @@ comparison. A visual improvement must not hide a material performance regression
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
-| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `AWAITING AUDIT` | Branch `claude/v006-planet-surfaces`; implementation commit `3cb8da7`. Seam discontinuity <1/255 on all four bodies; dark-side p05 unchanged; brightness within 0.3% of baseline | Pending — needs an auditor other than Claude, who wrote this slice | Pending |
+| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `AWAITING AUDIT` | Branch `claude/v006-planet-surfaces`; `3cb8da7` then remediation `fba96e5`. Terrestrial disc dynamic range roughly doubled (Terra 25.6 → 65.4, Mars 21.2 → 51.3); seam <1/255 | Pending — needs an auditor other than Claude, who wrote this slice | Operator 2026-07-28: Jupiter good, Terra wanted clearer cloud/land/water separation — remediated in `fba96e5`, awaiting re-review |
+| V-009 | Atmospheric rim halo around planet limbs | `AWAITING AUDIT` | Operator feedback 2026-07-28 (No Man's Sky reference). Branch `claude/v006-planet-surfaces`, commit `fba96e5`. Impact-parameter shader; limb glow decays to background over ~28px | Pending — needs an auditor other than Claude | Pending |
 | V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Operator feedback 2026-07-27; retain clear target/radar sightlines | — | — |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
@@ -732,6 +733,106 @@ suspiciously clean:**
 **Verdict:** n/a — worker entry.
 
 **Gate transition:** `PROPOSED` → `AWAITING AUDIT`.
+
+### 2026-07-28 — Operator — human — V-006 partial feedback, and V-009 requested
+
+**Reviewed:** hosted preview at `0c29ac9`.
+
+**Operator feedback, verbatim:** "Jupiter looks good.. Terra could use some work making
+it look a bit more like clear cloud/land/water separation layers.. but overall, still an
+improvement. one thing i noticed in no man's sky, is that there is usually a halo that
+glows around perimeter/atmosphere on the planet.. We're obviously not going to do
+textures at this implementation level, but I think a few small details can really make
+the planets pop."
+
+**Disposition:** V-006 is not rejected — "still an improvement" — but Terra is not
+finished, so the slice reopens rather than passing. A new item, V-009, is registered for
+the atmospheric rim halo, with a No Man's Sky screenshot supplied as a mood reference,
+explicitly not a texture-fidelity target.
+
+**Gate transition:** V-006 `AWAITING AUDIT` → reopened for remediation.
+
+### 2026-07-28 — Claude — worker — V-006 remediation and V-009 atmosphere
+
+**Role note:** still the worker on both; neither can carry my `PASS`.
+
+**Branch/commit:** `claude/v006-planet-surfaces`, remediation commit `fba96e5` on top of
+`3cb8da7`. Separate worktree; the operator's uncommitted work untouched.
+
+**What changed:** `src/renderer-threejs.js` only. Adds `_buildCloudTexture()` and
+`_buildAtmosphereMaterial()` with a small GLSL pair, and retunes the terrestrial surface.
+
+**The atmosphere took three attempts, and the first two were wrong in ways only
+measurement caught.** I probed a radial luminance profile across the limb rather than
+trusting the screenshots, which is the only reason the first two failed:
+
+1. **`BackSide` — invisible.** The shell's visible far hemisphere has normals pointing
+   away from the camera, so the Fresnel term collapsed to nothing across the whole
+   annulus. Profile just outside the limb read 16–18 against a 16.1 background: *fainter
+   than the flat shell it replaced*, which had a 27 shelf. By eye it merely looked
+   subtle; by measurement it was doing nothing.
+2. **`FrontSide` Fresnel — inverted.** A Fresnel rim peaks at the *shell's* silhouette,
+   not the planet's, so the profile rose from 19 at the limb to 55 at the outer edge and
+   then cut off hard — the bright ring was in the wrong place, floating off the planet.
+3. **Impact parameter — correct.** Driving the glow from the view ray's closest approach
+   to the planet centre puts the peak at the planet's own limb, decaying outward to
+   background over ~28 px. `smoothstep` keeps it at zero inside the disc so the near
+   hemisphere cannot fog the surface.
+
+A fourth pass was needed on strength alone: the first working version rendered a
+saturated neon hoop (limb 214.8 against a 16 background). That capture is kept as
+`docs/audit/v-009/07-rejected-neon-hoop.png` so the rejected look is on record, not just
+described.
+
+**Cloud layer:** terrestrial bodies get a second shell at 1.015 r with its own sparse
+cloud map. My first attempt used 46 dense puffs and blanketed the surface — it destroyed
+exactly the land/water separation the operator asked for, making Terra a hazy ball.
+Reduced to 24 sparser, fainter puffs so ground stays visible beneath them. Ocean is
+darkened to 0.80 and continents cut from 22 large blobs to 14 smaller ones, so water
+dominates and coastlines read as shapes.
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; no
+page errors; V-008's spawn still measures 796 u to the station with the nearest hostile
+at 12887 u.
+
+Measured on a disc sampled strictly *inside* the planet silhouette, so the halo cannot
+contaminate the surface numbers:
+
+| Planet | Dynamic range before → after | Saturation before → after |
+|---|---|---|
+| Terra | 25.6 → 65.4 | 0.249 → 0.264 |
+| Mars | 21.2 → 51.3 | 0.561 → 0.488 |
+| Luna | 46.7 → 43.4 | 0.190 → 0.191 |
+| Jupiter | 87.6 → 85.4 | 0.717 → 0.742 |
+
+Terrestrial contrast roughly doubles while Luna and Jupiter stay within noise — a useful
+control, since only terrestrial bodies were targeted. Terra's saturation is slightly
+*up*, so identity colour was not eroded this time.
+
+**Note on the earlier metric.** My first pass reported "dark-side p05 unchanged" from a
+brightness-thresholded sample. That threshold also swept in the old flat atmosphere
+shell, which sat just above the cutoff; removing the shell changed which pixels were
+sampled and made p05 appear to leap (Luna 29.7 → 125.7) with no real lighting change.
+The disc-masked metric above replaces it. The V-006 terminator conclusion still holds —
+`emissive` is untouched — but it was reached with a contaminated instrument.
+
+**Findings and open risks:**
+
+1. **Halo strength is a taste call.** 1.20 for atmospheres, 0.30 for airless moons. The
+   range between "invisible" and "neon hoop" is narrow and I landed it by eye against
+   the reference. Easy to move either way.
+2. **Mars gets clouds because the radius heuristic calls it terrestrial.** Defensible as
+   dust haze, but it is a side effect of the threshold, not a decision.
+3. **Mars lost some saturation** (0.561 → 0.488) from the cloud layer. Smaller than
+   V-001's rejected wash, but it is the same category of drift and worth an opinion.
+4. **Memory grew again.** Terrestrial planets now carry two 1024 × 512 textures instead
+   of one, roughly 5.4 MB each. Both are disposed on system change.
+5. **Still SOL-only, and no performance claim.**
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** V-006 reopened → `AWAITING AUDIT`; V-009 `PROPOSED` →
+`AWAITING AUDIT`.
 
 ## Entry template
 
