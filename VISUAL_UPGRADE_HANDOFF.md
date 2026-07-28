@@ -934,6 +934,30 @@ periphery is now structure instead of space.
 
 **Gate transition:** `PROPOSED` → `AWAITING AUDIT`.
 
+### 2026-07-28 — Claude — worker — V-007 correction: roll is inert
+
+Correcting risk 4 of the previous entry, which said roll safety was "reasoned about
+rather than captured".
+
+I tried to capture a rolled frame on the live build by setting `G.p.roll` directly. The
+capture came back upright, which sent me to the source: `src/player.js:152` sets
+`p.roll = 0` unconditionally every frame, commented "Visual cockpit — no roll, keep HUD
+stable". A/D roll the *ship* via its quaternion, but the cockpit overlay is deliberately
+held level.
+
+So the accurate statement is not "unverified" but "cannot occur": `ctx.rotate(p.roll)` in
+`drawCockpit` is a no-op under current gameplay, and the frame cannot expose an
+uncovered corner because it never rotates. The oversized fill rect is therefore
+defensive cover for a path that is presently inert rather than a live requirement — it
+costs nothing and would matter immediately if cockpit roll were ever switched on.
+
+Worth knowing for whoever takes V-004 (camera motion polish): re-enabling cockpit roll
+is a one-line change there, and this frame is already built to survive it.
+
+**Verdict:** n/a — correction to a worker entry.
+
+**Gate transition:** none.
+
 ## Entry template
 
 ```md
