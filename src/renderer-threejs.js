@@ -163,6 +163,142 @@ function _buildReflectionEnvironment() {
   return _reflectionTarget.texture;
 }
 
+// ── GEOMETRY MERGE ───────────────────────────────────────────
+// BufferGeometryUtils lives in the module build, which this file does not load, so
+// merging is done by hand. Worth the ~30 lines: a station assembled from a dozen
+// primitives would otherwise cost a dozen draw calls each, and the V-001 audit
+// already rejected a change for taking the scene from 62 to 95.
+// Consumes the input geometries — they are disposed here.
+function _mergeGeos(parts) {
+  const src = parts.map(p => ({
+    geo: p.geo.index ? p.geo.toNonIndexed() : p.geo,
+    owned: !!p.geo.index,
+    orig: p.geo,
+    mat: p.mat,
+  }));
+  let total = 0;
+  src.forEach(s => { total += s.geo.getAttribute('position').count; });
+
+  const pos = new Float32Array(total * 3);
+  const nrm = new Float32Array(total * 3);
+  const nm = new THREE.Matrix3();
+  const v = new THREE.Vector3(), n = new THREE.Vector3();
+  let o = 0;
+
+  src.forEach(s => {
+    const pa = s.geo.getAttribute('position');
+    const na = s.geo.getAttribute('normal');
+    nm.getNormalMatrix(s.mat);
+    for (let i = 0; i < pa.count; i++) {
+      v.fromBufferAttribute(pa, i).applyMatrix4(s.mat);
+      pos[o * 3] = v.x; pos[o * 3 + 1] = v.y; pos[o * 3 + 2] = v.z;
+      n.fromBufferAttribute(na, i).applyMatrix3(nm).normalize();
+      nrm[o * 3] = n.x; nrm[o * 3 + 1] = n.y; nrm[o * 3 + 2] = n.z;
+      o++;
+    }
+    if (s.owned) s.geo.dispose();
+    s.orig.dispose();
+  });
+
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  return out;
+}
+
+// ── PROCEDURAL STATIONS ──────────────────────────────────────
+// `mkStation()` is an 8-sided drum of 18 verts, and `_convexHullGeo` then discards
+// everything concave about it, so a station rendered as a faceted ball. This builds
+// an actual structure instead: a spine, a habitat ring on the rotation axis, spokes,
+// docking pylons and masts, plus emissive window bands so the thing reads as
+// inhabited and gives the eye a sense of scale.
+//
+// Built around +Y because the renderer already spins stations on Y (`rAngle`), so
+// the ring turns in its own plane rather than tumbling end over end.
+// Outer radius stays ~105 u, well inside the 220 u landing-zone ring.
+const _winMatCache = {};
+
+function _windowMat(col) {
+  if (!_winMatCache[col]) {
+    // Warm light against cool hulls; deliberately not the faction colour, so
+    // windows read as lit interior rather than more of the same paint.
+    _winMatCache[col] = new THREE.MeshStandardMaterial({
+      color: 0x1a1408,
+      emissive: new THREE.Color(0xffc27a),
+      emissiveIntensity: 1.6,
+      roughness: 0.5,
+      metalness: 0.0,
+      toneMapped: true,
+    });
+  }
+  return _winMatCache[col];
+}
+
+function _buildStationGroup(col) {
+  const group = new THREE.Group();
+  const parts = [];
+  const T = (x, y, z) => new THREE.Matrix4().makeTranslation(x, y, z);
+  const push = (geo, mat) => parts.push({ geo, mat: mat || new THREE.Matrix4() });
+
+  // Central spine and the docking drum riding on it.
+  push(new THREE.CylinderGeometry(15, 15, 150, 8, 1));
+  push(new THREE.CylinderGeometry(30, 30, 46, 8, 1));
+  push(new THREE.CylinderGeometry(34, 26, 16, 8, 1), T(0, 30, 0));
+  push(new THREE.CylinderGeometry(26, 34, 16, 8, 1), T(0, -30, 0));
+
+  // Habitat ring in the XZ plane, so Y rotation spins it correctly.
+  const ring = new THREE.TorusGeometry(92, 12, 8, 28);
+  push(ring, new THREE.Matrix4().makeRotationX(Math.PI / 2));
+
+  // Spokes out to the ring.
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2;
+    const m = new THREE.Matrix4()
+      .makeRotationY(-a)
+      .multiply(new THREE.Matrix4().makeTranslation(0, 0, 46))
+      .multiply(new THREE.Matrix4().makeScale(1, 1, 1));
+    push(new THREE.BoxGeometry(9, 9, 92), m);
+  }
+
+  // Docking pylons at each pole, and a pair of masts for silhouette interest.
+  push(new THREE.BoxGeometry(46, 12, 12), T(0, 84, 0));
+  push(new THREE.BoxGeometry(12, 12, 46), T(0, -84, 0));
+  push(new THREE.CylinderGeometry(2.5, 2.5, 54, 5), T(38, 52, 0));
+  push(new THREE.CylinderGeometry(2.5, 2.5, 54, 5), T(-38, -52, 0));
+
+  const structure = new THREE.Mesh(_mergeGeos(parts), _meshMat(col));
+  group.add(structure);
+
+  // Windows: one InstancedMesh, so the whole lit band is a single draw call.
+  const winGeo = new THREE.BoxGeometry(7, 3.2, 3.2);
+  const RING_WIN = 28, HUB_WIN = 8;
+  const inst = new THREE.InstancedMesh(winGeo, _windowMat(col), RING_WIN + HUB_WIN);
+  const m4 = new THREE.Matrix4();
+  let k = 0;
+  for (let i = 0; i < RING_WIN; i++) {
+    const a = (i / RING_WIN) * Math.PI * 2;
+    m4.makeRotationY(-a).multiply(new THREE.Matrix4().makeTranslation(0, 0, 104));
+    inst.setMatrixAt(k++, m4);
+  }
+  for (let i = 0; i < HUB_WIN; i++) {
+    const a = (i / HUB_WIN) * Math.PI * 2;
+    m4.makeRotationY(-a).multiply(new THREE.Matrix4().makeTranslation(0, 6, 31));
+    inst.setMatrixAt(k++, m4);
+  }
+  inst.instanceMatrix.needsUpdate = true;
+  group.add(inst);
+
+  return group;
+}
+
+// Deliberately NOT geometry-cached across stations. `initSceneForSystem` disposes
+// station children by traversal, so a shared cached geometry would be freed out from
+// under the next system load. Building per station costs two geometries each, once
+// per system change, which is nothing next to that class of bug.
+function _stationMesh(col) {
+  return _buildStationGroup(col);
+}
+
 // ── PROCEDURAL PLANET SURFACES ───────────────────────────────
 // Planets were flat single-colour spheres. These build an equirectangular albedo
 // map per planet so they read as places rather than coloured balls.
@@ -664,8 +800,10 @@ function initSceneForSystem(G) {
 
   // Stations
   G.stations.forEach(st => {
-    // Custom GLTF preferred; fall back to procedural convex hull.
-    const mesh = assetsGetModel('station') || _modelToMesh(st.model, st.col);
+    // Custom GLTF preferred; otherwise the procedural station structure.
+    // The legacy convex hull of st.model is no longer used for the 3D view, but
+    // st.model itself still drives the 2D MFD/radar wireframe in canvas.js.
+    const mesh = assetsGetModel('station') || _stationMesh(st.col);
     mesh.position.set(st.pos.x, st.pos.y, st.pos.z);
     mesh.userData.entity = st;
     _stationGroup.add(mesh);
