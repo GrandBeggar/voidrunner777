@@ -55,7 +55,7 @@ comparison. A visual improvement must not hide a material performance regression
 
 | ID | Slice | State | Worker evidence | Auditor | Human gate |
 |---|---|---|---|---|---|
-| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING HUMAN` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Pending — needs `ACCEPTED` from Stephen or Doran |
+| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING HUMAN` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Stephen 2026-07-27: accepted for live preview; final visual confirmation pending hosted review |
 | V-002 | Low-threshold bloom for emissive bullets, particles, and engines | `DEFERRED` | Requires a post-processing pipeline and a measured frame-time budget. Re-audit note: Linear tone mapping leaves ~27% of the station hull region hard-clipped, so bloom will key off far more area than the baseline look implies — revisit tone mapping as part of this slice | — | — |
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
@@ -370,6 +370,23 @@ now needs an explicit `ACCEPTED` from Stephen or Doran before it is ready to mer
 The specific thing to eyeball is `docs/audit/v-001/09-station-remediated-b238423.png`
 and `10-hull-closeup-remediated-b238423.png`: confirm the station green reads as the
 correct faction identity colour and the nebula stays subordinate to HUD legibility.
+
+### 2026-07-27 — Stephen — human — V-001 live-preview authorization
+
+**Branch/commit:** `codex/visual-upgrade-v1` at audited branch tip `c41a312`, containing
+remediation commit `b238423` and the auditor's `PASS` evidence.
+
+**Human feedback:** "accept.. I can only confirm changes are correct AFTER the changes
+go live"
+
+**Disposition:** accepted for deployment to a browser-accessible preview. This is not
+yet final visual acceptance and does not authorize the upstream merge. Stephen will
+review the hosted build before the human merge gate closes.
+
+**Verdict:** final `ACCEPTED` pending live review.
+
+**Gate transition:** none. V-001 remains `AWAITING HUMAN` until the hosted preview is
+reviewed; live-preview deployment is authorized.
 
 ## Entry template
 
