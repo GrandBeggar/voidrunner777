@@ -163,6 +163,118 @@ function _buildReflectionEnvironment() {
   return _reflectionTarget.texture;
 }
 
+// ── PROCEDURAL PLANET SURFACES ───────────────────────────────
+// Planets were flat single-colour spheres. These build an equirectangular albedo
+// map per planet so they read as places rather than coloured balls.
+//
+// Two constraints shape the construction:
+//   * No visible UV seam. Latitude bands are drawn as a vertical gradient, so they
+//     are constant in u and cannot seam. Blobs are drawn three times (-W, 0, +W)
+//     so anything crossing the wrap matches itself on the far edge.
+//   * No shimmer. Features are large and low-frequency, mipmaps are on, and
+//     anisotropy is set to the hardware maximum.
+//
+// The texture carries the planet's colour, so the material's `color` becomes white
+// while `emissive` is left exactly as it was — the night side keeps its original
+// lift and the terminator stays as readable as before.
+
+// Deterministic per-planet PRNG: the same planet looks the same every run, which
+// also keeps before/after captures comparable.
+function _seededRand(seed) {
+  let s = 2166136261 >>> 0;
+  for (let i = 0; i < seed.length; i++) s = (Math.imul(s ^ seed.charCodeAt(i), 16777619)) >>> 0;
+  return () => { s = (Math.imul(s, 1664525) + 1013904223) >>> 0; return s / 4294967296; };
+}
+
+function _buildPlanetTexture(pl) {
+  const W = 1024, H = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  const rnd = _seededRand(String(pl.name || pl.col));
+  // THREE.Color holds linear-sRGB under colour management, but canvas pixels are
+  // sRGB and the texture is tagged sRGB. Convert back before writing, or the value
+  // gets linearised twice and every planet renders ~35% too dark.
+  const base = new THREE.Color(pl.col).convertLinearToSRGB();
+
+  const cssOf = (c, m, a) => {
+    const r = Math.min(255, Math.round(c.r * 255 * m));
+    const g = Math.min(255, Math.round(c.g * 255 * m));
+    const b = Math.min(255, Math.round(c.b * 255 * m));
+    return a == null ? `rgb(${r},${g},${b})` : `rgba(${r},${g},${b},${a})`;
+  };
+  const css = (m, a) => cssOf(base, m, a);
+
+  // Type from radius so this generalises to systems we have not authored.
+  const isGas  = pl.r >= 400;
+  const isMoon = pl.r <= 150;
+
+  // Terrestrial landmasses need their own colour, not just a lighter patch of the
+  // base, or a blue world reads as blue-on-blue. Blend toward a fixed green-ochre
+  // rather than rotating hue: rotation by a fixed angle sends blue to magenta and
+  // costs the planet its identity colour, whereas blending cannot overshoot.
+  const land = base.clone().lerp(new THREE.Color().setRGB(0.42, 0.55, 0.30), 0.65);
+
+  // Latitude banding — a vertical gradient, therefore seamless in u by construction.
+  const stops = isGas ? 22 : 10;
+  const amp   = isGas ? 0.34 : (isMoon ? 0.14 : 0.22);
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  for (let i = 0; i <= stops; i++) {
+    const t = i / stops;
+    // Slight limb darkening toward both poles keeps the sphere reading as round.
+    const polar = 1 - 0.14 * Math.pow(Math.abs(t * 2 - 1), 2.2);
+    grad.addColorStop(t, css((1 + (rnd() - 0.5) * 2 * amp) * polar));
+  }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Large-scale breakup: continents, storms, or crater mottle depending on type.
+  const blobs   = isGas ? 7 : (isMoon ? 34 : 22);
+  const stretch = isGas ? 2.6 : 1.0;   // gas storms elongate along the bands
+  for (let i = 0; i < blobs; i++) {
+    const cx = rnd() * W, cy = rnd() * H;
+    const r  = isMoon ? 12 + rnd() * 30 : (isGas ? 40 + rnd() * 70 : 50 + rnd() * 135);
+    const m  = isMoon ? 0.72 + rnd() * 0.42 : (isGas ? 0.70 + rnd() * 0.54 : 0.80 + rnd() * 0.45);
+    // Terrestrial blobs are land; gas and moon blobs stay tonal on the base hue.
+    const c  = (!isGas && !isMoon) ? land : base;
+    const a0 = (!isGas && !isMoon) ? 0.92 : 0.85;
+    for (const off of [-W, 0, W]) {
+      ctx.save();
+      ctx.translate(cx + off, cy);
+      ctx.scale(stretch, 1);
+      const g2 = ctx.createRadialGradient(0, 0, 0, 0, 0, r);
+      g2.addColorStop(0, cssOf(c, m, a0));
+      g2.addColorStop(0.62, cssOf(c, m, a0 * 0.45));
+      g2.addColorStop(1, cssOf(c, m, 0));
+      ctx.fillStyle = g2;
+      ctx.fillRect(-r, -r, r * 2, r * 2);
+      ctx.restore();
+    }
+  }
+
+  // Polar caps for terrestrial bodies only — gas giants and moons do not get them.
+  if (!isGas && !isMoon) {
+    for (const capTop of [true, false]) {
+      const h = H * (0.07 + rnd() * 0.05);
+      const cg = ctx.createLinearGradient(0, capTop ? 0 : H, 0, capTop ? h : H - h);
+      cg.addColorStop(0, css(1.5, 0.7));
+      cg.addColorStop(1, css(1.5, 0));
+      ctx.fillStyle = cg;
+      ctx.fillRect(0, capTop ? 0 : H - h, W, h);
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.anisotropy = _renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
 // Low-contrast equirectangular backdrop: enough colour variation to establish
 // depth and art direction while leaving the authored star field readable.
 function _buildNebulaBackground() {
@@ -372,11 +484,14 @@ function initSceneForSystem(G) {
     _disposeObj(c);
     _pBaseGroup.remove(c);
   }
-  // Clear planets (each planet creates its own material — dispose it)
+  // Clear planets (each planet creates its own material and albedo map — dispose both)
   while (_planetGroup.children.length) {
     const c = _planetGroup.children[0];
     if (c.geometry) c.geometry.dispose();
-    if (c.material) c.material.dispose();
+    if (c.material) {
+      if (c.material.map) c.material.map.dispose();
+      c.material.dispose();
+    }
     _planetGroup.remove(c);
   }
   // Clear launch zone
@@ -463,8 +578,11 @@ function initSceneForSystem(G) {
     const col = new THREE.Color(pl.col);
 
     const geo = new THREE.SphereGeometry(pl.r, 48, 32);
+    // The albedo map carries the planet colour, so `color` goes white to avoid
+    // multiplying it twice. `emissive` is unchanged so the terminator reads as before.
     const mat = new THREE.MeshStandardMaterial({
-      color: col,
+      map: _buildPlanetTexture(pl),
+      color: 0xffffff,
       emissive: col.clone().multiplyScalar(0.12),
       metalness: 0.0,
       roughness: 0.85,
