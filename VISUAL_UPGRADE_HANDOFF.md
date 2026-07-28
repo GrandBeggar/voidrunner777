@@ -60,6 +60,9 @@ comparison. A visual improvement must not hide a material performance regression
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
+| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `PROPOSED` | Stephen feedback 2026-07-27; use the Homeworld reference for visual principle, not direct imitation | — | — |
+| V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Stephen feedback 2026-07-27; retain clear target/radar sightlines | — | — |
+| V-008 | Start the player closer to stations, traffic, or other meaningful entities | `PROPOSED` | Stephen feedback 2026-07-27; must remain collision-safe and avoid immediate hostile spawn traps | — | — |
 
 ## Acceptance notes
 
@@ -387,6 +390,47 @@ review the hosted build before the human merge gate closes.
 
 **Gate transition:** none. V-001 remains `AWAITING HUMAN` until the hosted preview is
 reviewed; live-preview deployment is authorized.
+
+### 2026-07-27 — Stephen — human — visual direction reference and next slices
+
+**Reference:** screenshot from the unrelated Homeworld-style "one shot" project that
+started this review. It is a mood and composition reference only; VOIDRUNNER remains a
+first-person trading/combat game and should not inherit RTS interface conventions that
+do not fit its play.
+
+**Human feedback:** three concrete opportunities were identified, with more feedback
+still to come:
+
+1. Planets need gradients or surface patterns so they read as places rather than plain
+   coloured spheres. The useful cue in the reference is layered large-scale variation:
+   lit and shadowed regions, bands, terrain-like breakup, and rings—not asset density
+   for its own sake.
+2. The HUD's current perimeter is only a basic outline. It should suggest a physical
+   ship cockpit through thicker structural members, inset panels, and a recognizable
+   silhouette while preserving the crisp vector instrumentation and central view.
+3. The initial spawn is too far from meaningful entities. The opening composition
+   should put a station, traffic, planet, or other point of interest close enough that
+   the player encounters the game immediately rather than spending several minutes in
+   empty transit.
+
+**Proposed slice boundaries:** V-006 owns planet surface presentation only; V-007 owns
+cockpit/HUD framing only; V-008 owns initial placement and safety only. Do not bundle
+them into one implementation or treat the Homeworld screenshot as a pixel target.
+
+**Acceptance direction:**
+
+- V-006 should show visible large-scale planet variation at normal play distance with
+  no texture shimmer, obvious UV seam, or loss of terminator readability.
+- V-007 should look like a cockpit at a glance without covering target brackets,
+  warnings, radar, or the central combat view; ship-specific variation is desirable but
+  not required for the first slice.
+- V-008 should place a clearly identifiable non-hostile point of interest within a
+  short flight while preserving collision clearance and a safe reaction window.
+
+**Verdict:** direction recorded; implementation intentionally not started while more
+human feedback is pending.
+
+**Gate transition:** none. V-006, V-007, and V-008 enter the checklist as `PROPOSED`.
 
 ## Entry template
 
