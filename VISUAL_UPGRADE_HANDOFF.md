@@ -55,11 +55,11 @@ comparison. A visual improvement must not hide a material performance regression
 
 | ID | Slice | State | Worker evidence | Auditor | Human gate |
 |---|---|---|---|---|---|
-| V-001 | Tone mapping, sRGB output, procedural reflections, hull-edge overlays, and subtle nebula backdrop | `CHANGES REQUESTED` | Branch `codex/visual-upgrade-v1`; implementation commit `bdf4561` | Claude auditor 2026-07-27: `CHANGES REQUESTED` — ACES tone mapping desaturates faction hull colour ~33% | Pending |
+| V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `AWAITING AUDIT` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`; remediation pending re-audit | Pending |
 | V-002 | Low-threshold bloom for emissive bullets, particles, and engines | `DEFERRED` | Requires a post-processing pipeline and a measured frame-time budget | — | — |
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
-| V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed. Amplified by V-001's edge geometry | — | — |
+| V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
 
 ## Acceptance notes
 
@@ -72,7 +72,8 @@ flat faceted geometry on a black background.
 Review these risks deliberately:
 
 - The nebula must remain subordinate to HUD legibility and target visibility.
-- Additive hull edges must not turn distant fleets into unreadable bright noise.
+- Hull-edge overlays were removed in remediation `b238423`; their subtle visual delta
+  did not justify the measured draw-call increase.
 - The procedural reflection environment must improve metal response without making
   every faction share an indistinguishable chrome finish.
 - Geometry added for edge overlays must be disposed with its parent hull.
@@ -241,6 +242,46 @@ Station hull, same region, same viewport:
 
 **Gate transition:** `AWAITING AUDIT` → `CHANGES REQUESTED`. Finding 1 needs a human
 art-direction call from Stephen or Doran; findings 2 and 3 are worker follow-ups.
+
+### 2026-07-27 — Codex — worker — V-001 changes-requested remediation
+
+**Branch/commit:** `codex/visual-upgrade-v1` at remediation commit
+`b238423f75da9c1f8b0bd988ce0d9511cf81d55c`, applied after audit commit `aa84d5a`.
+
+**What changed:** accepted the auditor's faction-colour finding and selected colour
+identity as the governing art-direction criterion. ACES filmic tone mapping was
+replaced with Linear tone mapping at exposure 1.0. The per-hull edge overlay and its
+material cache were removed because the audit measured 95 versus 62 draw calls for a
+subtle close-range difference. PMREM sigma was reduced from 0.05 to 0.03 to stay under
+the sample limit and remove the two new warnings. The nebula, reflection environment,
+sRGB output, and recursive geometry disposal remain.
+
+**Where to look:** `src/renderer-threejs.js`, specifically `_modelToMesh`,
+`_buildReflectionEnvironment`, and `initScene`.
+
+**Evidence:** all `src/*.js` files passed `node --check`; `git diff --check` passed;
+the game launched at 1280 × 720 through local HTTP and rendered the initial SOL view.
+The browser reported only the pre-existing Three.js global-build deprecation warning.
+The PMREM warnings reported by the auditor are gone. A Neutral tone-mapping candidate
+was tested and rejected because the pinned r160 global build does not support it and
+emitted repeated `Unsupported toneMapping` shader warnings. No performance claim is
+made: the real-GPU stress scene remains outstanding.
+
+**Evidence correction:** the initial worker entry's claim that `bdf4561` emitted only
+the pre-existing warning was inaccurate. The independent audit correctly identified
+two PMREM sample-limit warnings. This entry corrects the record without rewriting the
+original claim.
+
+**Findings and open risks:** the remediation follows the audit's measured causal
+finding and removes the unfavourable edge-overlay trade. It still needs the auditor to
+repeat the fixed station-region colour measurement and close-hull capture against
+`b238423`. V-005 remains a separate pre-existing leak; removing the edge overlay means
+V-001 no longer amplifies it.
+
+**Verdict:** n/a — worker remediation, not an audit or human verdict.
+
+**Gate transition:** `CHANGES REQUESTED` → `AWAITING AUDIT` after remediation commit
+`b238423` was created. The human gate remains pending.
 
 ## Entry template
 
