@@ -60,7 +60,7 @@ comparison. A visual improvement must not hide a material performance regression
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
-| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `PROPOSED` | Operator feedback 2026-07-27; use the Homeworld reference for visual principle, not direct imitation | — | — |
+| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `AWAITING AUDIT` | Branch `claude/v006-planet-surfaces`; implementation commit `3cb8da7`. Seam discontinuity <1/255 on all four bodies; dark-side p05 unchanged; brightness within 0.3% of baseline | Pending — needs an auditor other than Claude, who wrote this slice | Pending |
 | V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Operator feedback 2026-07-27; retain clear target/radar sightlines | — | — |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
@@ -639,6 +639,99 @@ initial spawn rather than post-jump arrival.
 
 **Gate transition:** `AWAITING AUDIT` → `ACCEPTED` on the operator gate. The auditor gate
 remains open.
+
+### 2026-07-27 — Claude — worker — V-006 procedural planet surfaces
+
+**Role note:** as with V-008, I am the worker here and cannot supply the auditor `PASS`.
+
+**Branch/commit:** `claude/v006-planet-surfaces`, branched from `75c2dd3` (the V-008 tip,
+so the preview carries V-001 and V-008 too). Implementation commit `3cb8da7`. Worked in
+a separate worktree; the operator's uncommitted changes were never touched.
+
+**What changed:** `src/renderer-threejs.js` only, +108 / −3. Adds `_seededRand()` and
+`_buildPlanetTexture()`, and gives each planet an equirectangular albedo map: latitude
+banding, large-scale blobs, and polar caps. Planet type comes from radius — gas giant
+above 400 u, moon below 150 u, terrestrial between — so it generalises to systems we
+have not authored rather than keying off planet names.
+
+**Two constraints drove the construction:**
+
+- *No UV seam.* Bands are drawn as a vertical gradient, so they are constant in u and
+  cannot seam at all. Blobs are drawn three times, at −W, 0 and +W, so anything crossing
+  the wrap matches itself on the far edge.
+- *No shimmer.* Features are large and low-frequency, mipmaps are on, and anisotropy is
+  set to the hardware maximum (16 on this machine).
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; no
+page errors. V-008's spawn placement still measures 796 u to the station with the
+nearest hostile at 12935 u, so this slice did not disturb it.
+
+Seam continuity was measured, not eyeballed. Texture columns 0 and W−1 are adjacent once
+wrapped, so their difference is compared against an ordinary interior neighbour pair as a
+control, on a 0–255 scale:
+
+| Planet | Seam diff | Interior control | Ratio |
+|---|---|---|---|
+| Terra | 0.767 | 0.628 | 1.22 |
+| Luna | 0.408 | 0.250 | 1.63 |
+| Mars | 0.758 | 0.588 | 1.29 |
+| Jupiter | 0.403 | 0.274 | 1.47 |
+
+Every seam difference is below 1/255 — under a single quantisation step, therefore not
+displayable, let alone visible.
+
+Close-view luminance over a fixed box, before versus after:
+
+| Planet | Mean before → after | Dark-side p05 before → after |
+|---|---|---|
+| Terra | 108.5 → 108.8 | 26.6 → 26.6 |
+| Luna | 144.8 → 143.9 | 29.7 → 29.7 |
+| Mars | 105.1 → 105.2 | 25.4 → 25.4 |
+| Jupiter | 158.5 → 156.9 | 32.4 → 32.4 |
+
+Brightness is preserved and **dark-side p05 is identical on all four bodies**, which is
+the terminator-readability criterion met exactly rather than approximately. That is by
+construction: `emissive` was deliberately left untouched, so the night-side lift is the
+same value it always was.
+
+**Two mistakes I made and corrected, recorded because the numbers would otherwise look
+suspiciously clean:**
+
+1. **Double colour-space conversion.** The first version rendered every planet ~35%
+   darker (Terra mean 108.5 → 68.7) *with less* variation. `THREE.Color` stores
+   linear-sRGB under colour management, but I wrote those values straight into an
+   sRGB-tagged canvas, so they were linearised twice. Fixed with
+   `convertLinearToSRGB()`; brightness then returned to within 0.3% of baseline. I only
+   caught this because I measured against a baseline instead of just looking at the
+   result — it read as "moody" rather than obviously wrong.
+2. **Hue rotation turned Terra pink.** Strengthening the effect by rotating continent hue
+   a fixed +0.30 sent Terra's blue to magenta and destroyed its identity colour — the
+   exact failure mode the V-001 audit had already flagged for faction colours. Replaced
+   with a blend toward a fixed green-ochre, which cannot overshoot regardless of base
+   hue. Terra now reads blue with green landmasses; Mars reads rust with olive.
+
+**Findings and open risks:**
+
+1. **Impact is uneven across body types.** Jupiter's banding is the standout and is
+   plainly visible; Terra and Mars are improved but still fairly soft. Given the
+   "nothing is super noticeable yet" note on V-001, the operator may want terrestrial
+   contrast pushed further. I stopped where I did because the previous step overshot
+   into pink, and the honest position is that this is a judgement call for the human
+   gate, not a solved problem.
+2. **Only SOL was inspected.** Other systems use the same radius heuristic but were not
+   viewed. A planet near a threshold — just under 400 u or just over 150 u — will flip
+   type, which is worth an auditor's spot check.
+3. **The radius thresholds are arbitrary.** 400 u and 150 u were chosen to sort SOL's
+   four bodies correctly. They are not derived from anything.
+4. **Texture memory grows with planet count.** Each planet now allocates a 1024 × 512
+   canvas texture with mipmaps, roughly 2.7 MB of GPU memory per planet. SOL's four are
+   trivial; a system with many bodies would not be. Disposal was added so they are
+   released on system change, but the per-system ceiling is untested.
+5. **No performance claim.** Frame time remains vsync-capped on software rendering here.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** `PROPOSED` → `AWAITING AUDIT`.
 
 ## Entry template
 
