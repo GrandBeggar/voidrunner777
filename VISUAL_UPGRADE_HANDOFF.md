@@ -60,8 +60,8 @@ comparison. A visual improvement must not hide a material performance regression
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
-| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `AWAITING AUDIT` | Branch `claude/v006-planet-surfaces`; `3cb8da7` then remediation `fba96e5`. Terrestrial disc dynamic range roughly doubled (Terra 25.6 → 65.4, Mars 21.2 → 51.3); seam <1/255 | Pending — needs an auditor other than Claude, who wrote this slice | Operator 2026-07-28: Jupiter good, Terra wanted clearer cloud/land/water separation — remediated in `fba96e5`, awaiting re-review |
-| V-009 | Atmospheric rim halo around planet limbs | `AWAITING AUDIT` | Operator feedback 2026-07-28 (No Man's Sky reference). Branch `claude/v006-planet-surfaces`, commit `fba96e5`. Impact-parameter shader; limb glow decays to background over ~28px | Pending — needs an auditor other than Claude | Pending |
+| V-006 | Give planets authored-looking gradients, bands, or procedural surface patterns | `ACCEPTED` (audit gate open) | Branch `claude/v006-planet-surfaces`; `3cb8da7` then remediation `fba96e5`. Terrestrial disc dynamic range roughly doubled (Terra 25.6 → 65.4, Mars 21.2 → 51.3); seam <1/255 | Pending — needs an auditor other than Claude, who wrote this slice | Operator 2026-07-28: Jupiter good, Terra wanted clearer cloud/land/water separation — remediated in `fba96e5`; operator 2026-07-28: `ACCEPTED` |
+| V-009 | Atmospheric rim halo around planet limbs | `AWAITING AUDIT` | Operator feedback 2026-07-28 (No Man's Sky reference). Branch `claude/v006-planet-surfaces`, commit `fba96e5`. Impact-parameter shader; limb glow decays to background over ~28px | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "that looks excellent" |
 | V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `PROPOSED` | Operator feedback 2026-07-27; retain clear target/radar sightlines | — | — |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
@@ -833,6 +833,37 @@ The disc-masked metric above replaces it. The V-006 terminator conclusion still 
 
 **Gate transition:** V-006 reopened → `AWAITING AUDIT`; V-009 `PROPOSED` →
 `AWAITING AUDIT`.
+
+### 2026-07-28 — Operator — human — V-006 and V-009 acceptance
+
+**Branch/commit:** `claude/v006-planet-surfaces` at `8b73c1f`, reviewed on the hosted
+preview.
+
+**Operator feedback, verbatim** (one name redacted to `[the upstream owner]` per the
+standing instruction to use role terms in this file): "hey that looks excellent,
+especially considering it's not a complex texture map. I'm happy to proceed with that,
+we'll see what [the upstream owner] has to say, but I'm sure he'll be happy with the
+upgrade."
+
+**Disposition:** `ACCEPTED` for both V-006 and V-009. The earlier "Terra could use some
+work" feedback is resolved by `fba96e5`. Note that acceptance here is explicitly framed
+against the implementation level — procedural canvas maps, not authored textures — so it
+should not be read as a claim that the surfaces are finished art.
+
+**Downstream review still expected:** the operator anticipates a further review by the
+upstream repository owner. That is outside this file's gate structure; nothing here
+binds it.
+
+**Outstanding gate:** as with V-008, no independent audit exists for V-006 or V-009 —
+Claude wrote both. Three slices are now operator-accepted without an auditor `PASS`, so
+the merge gate as written is unmet for all three. This is worth resolving deliberately
+rather than by accumulation: either Codex audits `c3a417c`, `3cb8da7` and `fba96e5`, or
+the operator records a blanket waiver naming those commits.
+
+**Verdict:** ACCEPTED
+
+**Gate transition:** V-006 `AWAITING AUDIT` → `ACCEPTED` on the operator gate; V-009
+likewise. Auditor gate remains open on both.
 
 ## Entry template
 
