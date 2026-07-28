@@ -179,11 +179,13 @@ function _faceTones(geo, lo, hi) {
   geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
 }
 
-function _modelToMesh(model, col) {
+// `kind` selects the plating dialect: 'ship' by default, 'station' for fixed
+// structures such as pirate bases and the launch zone.
+function _modelToMesh(model, col, kind) {
   const geo = _convexHullGeo(model.verts);
   _boxUVs(geo, _HULL_UV_SCALE);
   _faceTones(geo, 0.74, 1.10);
-  return new THREE.Mesh(geo, _hullMat(col));
+  return new THREE.Mesh(geo, _hullMat(col, kind || 'ship'));
 }
 
 // Small native-Three reflection studio. It gives metal hulls readable cool/warm
@@ -281,36 +283,60 @@ function _mergeGeos(parts) {
 // Panel/plating map for hull surfaces. Deliberately near-greyscale: it multiplies
 // the faction colour rather than replacing it, so plating breaks up the monochrome
 // without shifting hue — the identity-colour failure V-001 was remediated for.
+// Two plating dialects. Station architecture is big plate, wide seam, hazard
+// striping. Ship hulls are tighter: small plates, fine seams and stringer lines
+// running along the hull, which at ship scale is what separates "vehicle" from
+// "building" even before you register the silhouette.
+const _PLATING = {
+  station: { plates: 130, pw: [24, 108], ph: [18, 84], seam: 64, stripes: 7, blocks: 26,
+             base: '#dcdcdc', plateLo: 186, plateRange: 69, stringers: 0 },
+  ship:    { plates: 210, pw: [8, 34],   ph: [7, 26],  seam: 26, stripes: 3, blocks: 46,
+             base: '#d6d6d6', plateLo: 178, plateRange: 76, stringers: 9 },
+};
+
 const _hullTexCache = {};
-function _buildHullTexture() {
-  if (_hullTexCache.tex) return _hullTexCache.tex;
+function _buildHullTexture(kind) {
+  const k = _PLATING[kind] ? kind : 'station';
+  if (_hullTexCache[k]) return _hullTexCache[k];
+  const cfg = _PLATING[k];
   const S = 512;
   const canvas = document.createElement('canvas');
   canvas.width = S; canvas.height = S;
   const ctx = canvas.getContext('2d');
-  const rnd = _seededRand('hull-plating');
+  const rnd = _seededRand('hull-plating-' + k);
 
   // Base plate tone, then rectangular plates at varying brightness.
-  ctx.fillStyle = '#dcdcdc';
+  ctx.fillStyle = cfg.base;
   ctx.fillRect(0, 0, S, S);
-  for (let i = 0; i < 130; i++) {
-    const w = 24 + rnd() * 108, h = 18 + rnd() * 84;
+  for (let i = 0; i < cfg.plates; i++) {
+    const w = cfg.pw[0] + rnd() * cfg.pw[1], h = cfg.ph[0] + rnd() * cfg.ph[1];
     const x = rnd() * S, y = rnd() * S;
-    const g = 186 + Math.floor(rnd() * 69);
+    const g = cfg.plateLo + Math.floor(rnd() * cfg.plateRange);
     ctx.fillStyle = `rgba(${g},${g},${g},${0.30 + rnd() * 0.45})`;
     ctx.fillRect(x, y, w, h);
   }
   // Seam grid — the strongest cue that a surface is panelled rather than painted.
+  const sm = cfg.seam, half = sm / 2;
   ctx.strokeStyle = 'rgba(52,56,60,0.42)';
   ctx.lineWidth = 2;
-  for (let x = 0; x <= S; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, S); ctx.stroke(); }
-  for (let y = 0; y <= S; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke(); }
+  for (let x = 0; x <= S; x += sm) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, S); ctx.stroke(); }
+  for (let y = 0; y <= S; y += sm) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke(); }
   ctx.strokeStyle = 'rgba(78,82,86,0.22)';
   ctx.lineWidth = 1;
-  for (let x = 32; x <= S; x += 64) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, S); ctx.stroke(); }
-  for (let y = 32; y <= S; y += 64) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke(); }
+  for (let x = half; x <= S; x += sm) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, S); ctx.stroke(); }
+  for (let y = half; y <= S; y += sm) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke(); }
+
+  // Stringers — long unidirectional lines. Ships only; they imply a spine and a
+  // direction of travel, which is wrong on a station.
+  ctx.strokeStyle = 'rgba(62,66,72,0.34)';
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < cfg.stringers; i++) {
+    const y = rnd() * S;
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(S, y); ctx.stroke();
+  }
+
   // Hazard stripes and dark service blocks for local contrast.
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < cfg.stripes; i++) {
     const x = rnd() * S, y = rnd() * S, w = 40 + rnd() * 70, h = 8 + rnd() * 12;
     ctx.save(); ctx.translate(x, y); ctx.rotate(rnd() < 0.5 ? 0 : Math.PI / 2);
     ctx.fillStyle = 'rgba(70,70,74,0.65)'; ctx.fillRect(0, 0, w, h);
@@ -318,7 +344,7 @@ function _buildHullTexture() {
     for (let sx = 0; sx < w; sx += 12) ctx.fillRect(sx, 0, 6, h);
     ctx.restore();
   }
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < cfg.blocks; i++) {
     const x = rnd() * S, y = rnd() * S;
     ctx.fillStyle = `rgba(74,77,82,${0.30 + rnd() * 0.34})`;
     ctx.fillRect(x, y, 6 + rnd() * 20, 6 + rnd() * 16);
@@ -330,7 +356,7 @@ function _buildHullTexture() {
   tex.generateMipmaps = true;
   tex.minFilter = THREE.LinearMipmapLinearFilter;
   tex.anisotropy = _renderer.capabilities.getMaxAnisotropy();
-  _hullTexCache.tex = tex;
+  _hullTexCache[k] = tex;
   return tex;
 }
 
@@ -341,21 +367,25 @@ function _buildHullTexture() {
 // structure. Slightly blue to sit against the warm sun.
 const _STATION_STEEL = '#8d969e';
 
+// Cached per (plating dialect, colour). Ships read slightly less polished than
+// station architecture, so roughness differs a little too.
 const _hullMatCache = {};
-function _hullMat(col) {
-  if (!_hullMatCache[col]) {
+function _hullMat(col, kind) {
+  const k = _PLATING[kind] ? kind : 'station';
+  const key = k + '|' + col;
+  if (!_hullMatCache[key]) {
     const c = new THREE.Color(col);
-    _hullMatCache[col] = new THREE.MeshStandardMaterial({
+    _hullMatCache[key] = new THREE.MeshStandardMaterial({
       color: c,
-      map: _buildHullTexture(),
+      map: _buildHullTexture(k),
       vertexColors: true,
       emissive: c.clone().multiplyScalar(0.06),
-      metalness: 0.62,
-      roughness: 0.52,
+      metalness: k === 'ship' ? 0.58 : 0.62,
+      roughness: k === 'ship' ? 0.46 : 0.52,
       envMapIntensity: 1.15,
     });
   }
-  return _hullMatCache[col];
+  return _hullMatCache[key];
 }
 
 // ── PROCEDURAL STATIONS ──────────────────────────────────────
@@ -981,7 +1011,7 @@ function initSceneForSystem(G) {
 
   // Pirate bases
   G.pBases.forEach(pb => {
-    const mesh = assetsGetModel('pirate_base') || _modelToMesh(pb.model, pb.col);
+    const mesh = assetsGetModel('pirate_base') || _modelToMesh(pb.model, pb.col, 'station');
     mesh.position.set(pb.pos.x, pb.pos.y, pb.pos.z);
     mesh.userData.entity = pb;
     _pBaseGroup.add(mesh);
@@ -989,7 +1019,7 @@ function initSceneForSystem(G) {
 
   // Launch zone
   if (G.launchZone) {
-    _launchZoneObj = _modelToMesh(G.launchZone.model, '#50c8ff');
+    _launchZoneObj = _modelToMesh(G.launchZone.model, '#50c8ff', 'station');
     _launchZoneObj.position.set(G.launchZone.pos.x, G.launchZone.pos.y, G.launchZone.pos.z);
     _launchZoneObj.userData.entity = G.launchZone;
     _sceneRoot.add(_launchZoneObj);
