@@ -64,6 +64,7 @@ comparison. A visual improvement must not hide a material performance regression
 | V-009 | Atmospheric rim halo around planet limbs | `AWAITING AUDIT` | Operator feedback 2026-07-28 (No Man's Sky reference). Branch `claude/v006-planet-surfaces`, commit `fba96e5`. Impact-parameter shader; limb glow decays to background over ~28px | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "that looks excellent" |
 | V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `ACCEPTED` (parked) | Branch `claude/v007-cockpit-frame`; commit `a80e567`. Centre view and warning row measured unchanged (22.78 → 22.77, 17.20 → 17.22) | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "ya this is fine", but HUD treated as placeholder pending upstream direction |
 | V-010 | Stations as assembled structures instead of convex-hull blobs | `AWAITING AUDIT` | Branch `claude/v010-station-structure`; commit `78d5abe`. Spawn-view cost 74 → 78 draw calls, 22490 → 25716 tris | Pending — needs an auditor other than Claude | Pending |
+| V-013 | Station plating and two-tone materials | `AWAITING AUDIT` | Branch `claude/v013-station-texture`; commit `ee6ac67`. Saturation spread 0.150 → 0.281, near-neutral pixels 0.2% → 11.6%, mean hue held 156.5 → 147.6 | Pending — needs an auditor other than Claude | Pending |
 | V-011 | NPC and player ship hulls — same convex-hull flattening as stations | `PROPOSED` | Not started. `_modelToMesh` discards all concavity; ships read as faceted shards at close range | — | — |
 | V-012 | Cargo containers, asteroids, pirate bases and landing zones | `PROPOSED` | Not started. Cargo is a bare `BoxGeometry`; pirate bases still use the convex hull | — | — |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
@@ -1050,6 +1051,90 @@ only console output is the pre-existing `favicon.ico` 404. Captures in
 **Verdict:** n/a — worker entry.
 
 **Gate transition:** `PROPOSED` → `AWAITING AUDIT`.
+
+### 2026-07-28 — Operator — human — V-013 requested
+
+**Operator feedback, verbatim:** "space station shape is decent.. can we add a bit of
+texturing to it to make it look less monochromatic"
+
+**Disposition:** V-010's silhouette is accepted in substance; the complaint is surface,
+not shape. Registered as V-013 rather than reopening V-010, since the geometry is not
+what is being challenged.
+
+**Gate transition:** V-013 enters the checklist.
+
+### 2026-07-28 — Claude — worker — V-013 station plating and two-tone
+
+**Role note:** worker; cannot supply the auditor `PASS`.
+
+**Branch/commit:** `claude/v013-station-texture`, branched from `f03d9c0`. Implementation
+commit `ee6ac67`. Separate worktree; operator's uncommitted work untouched.
+
+**What changed:** `src/renderer-threejs.js` only. Three things:
+
+1. `_mergeGeos()` now carries `uv` through and bakes an optional per-part `tint` into a
+   vertex-colour attribute. The original version discarded UVs, so a texture map would
+   have had nothing to sample — that had to be fixed before any plating was possible.
+2. `_buildHullTexture()` draws a procedural panel map: plate rectangles, a two-level seam
+   grid, hazard stripes and service blocks. Deliberately near-greyscale, because it
+   *multiplies* the faction colour; a coloured map would have shifted hue, which is the
+   exact failure V-001 was remediated for.
+3. The station splits into two merged meshes — faction-coloured hull (drum, collars,
+   ring, pylons) and neutral structural steel (spine, spokes, masts).
+
+**Why the split was necessary, having first tried without it.** My first attempt used
+vertex tints alone to pull the framework toward grey. It does not work, and the reason is
+structural rather than a tuning miss: vertex colours *multiply* the material colour, so a
+grey tint on a saturated green can only darken it. Multiplication cannot add the neutral
+component that desaturation requires. A genuinely two-tone station needs a second
+material, which costs one extra draw call per station — three total (hull, steel,
+windows) against two in V-010 and one in the original blob.
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; no
+console output beyond the pre-existing `favicon.ico` 404.
+
+Measured over the station's own pixels at a fixed camera, with NPCs cleared from the
+scene so nothing else entered the sample box:
+
+| | V-010 | V-013 |
+|---|---|---|
+| Saturation spread (sd) | 0.150 | 0.281 |
+| Near-neutral pixels | 0.2% | 11.6% |
+| Mean saturation | 0.878 | 0.723 |
+| Mean hue | 156.5° | 147.6° |
+| Mean luminance | 139.7 | 119.5 |
+
+Saturation *spread* is the number that matters for "less monochromatic", and it nearly
+doubled; roughly an eighth of the station is now genuinely neutral rather than
+essentially none. Mean hue barely moved and both values are green, so faction identity
+survived — checked deliberately, because "more variety" is exactly how the V-001
+wash-out could have crept back in disguised as an improvement.
+
+**A darkening I caused and corrected.** The first plating pass dropped mean luminance
+139.7 → 108.6, about 22%. The map multiplies, so a mid-grey base map dims everything it
+touches. Lifting the base tone and plate brightness recovered it to 119.5 while leaving
+the saturation spread untouched at 0.281. The station is still slightly darker than
+V-010, which is expected — seams and service blocks are genuinely dark — but it is no
+longer dingy.
+
+**Findings and open risks:**
+
+1. **Draw-call counts vary run to run**, because NPC population is random and affects
+   what is in frustum. Single-run comparisons of total calls are therefore noisy and I
+   have not quoted them as a delta. The deterministic statement is the structural one:
+   three draw calls per station, up from two.
+2. **UV scale is per-part and hand-set.** Plate density is roughly even across pieces but
+   was tuned by eye, not derived from surface area, so a future part could look
+   over- or under-tiled.
+3. **The plating map is shared by every station and faction.** Only the hue differs. At
+   close range two stations will show identical plate layouts.
+4. **Pirate bases and ships still use the old flat material** via `_meshMat`. `_hullMat`
+   is ready for them, and V-011/V-012 are the natural place to apply it.
+5. **Emissive window brightness is unchanged** and still unmeasured against V-002 bloom.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** V-013 `PROPOSED` → `AWAITING AUDIT`.
 
 ## Entry template
 
