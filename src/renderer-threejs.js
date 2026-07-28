@@ -13,7 +13,7 @@
 //    in its geometry so it distributes correctly around the camera.
 // ═══════════════════════════════════════════════════════════
 
-let _renderer, _scene, _sceneRoot, _camera, _sun;
+let _renderer, _scene, _sceneRoot, _camera, _sun, _reflectionTarget;
 
 // Scene object groups (rebuilt per system, live in _sceneRoot)
 let _stationGroup, _pBaseGroup, _planetGroup, _lzGroup, _asteroidGroup;
@@ -51,9 +51,27 @@ function _meshMat(col) {
       emissive: c.clone().multiplyScalar(0.10),
       metalness: 0.65,
       roughness: 0.40,
+      envMapIntensity: 1.25,
     });
   }
   return _meshMatCache[col];
+}
+
+// Procedural hull edges are the strongest authored detail in the source models.
+// Keep them visible over the convex hull so the low-poly look reads as deliberate.
+const _edgeMatCache = {};
+function _edgeMat(col) {
+  if (!_edgeMatCache[col]) {
+    _edgeMatCache[col] = new THREE.LineBasicMaterial({
+      color: new THREE.Color(col),
+      transparent: true,
+      opacity: 0.48,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+  }
+  return _edgeMatCache[col];
 }
 
 // Color cache (for bullets/particles)
@@ -125,7 +143,93 @@ function _convexHullGeo(verts) {
 // continues to be used by canvas.js for MFD/radar wireframes.
 function _modelToMesh(model, col) {
   const geo = _convexHullGeo(model.verts);
-  return new THREE.Mesh(geo, _meshMat(col));
+  const mesh = new THREE.Mesh(geo, _meshMat(col));
+  let edgeGeo;
+
+  if (model.edges?.length) {
+    const positions = [];
+    model.edges.forEach(([i, j]) => {
+      const a = model.verts[i], b = model.verts[j];
+      positions.push(a[0],a[1],a[2], b[0],b[1],b[2]);
+    });
+    edgeGeo = new THREE.BufferGeometry();
+    edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  } else {
+    edgeGeo = new THREE.EdgesGeometry(geo, 25);
+  }
+
+  const edges = new THREE.LineSegments(edgeGeo, _edgeMat(col));
+  edges.scale.setScalar(1.004);
+  edges.renderOrder = 1;
+  mesh.add(edges);
+  return mesh;
+}
+
+// Small native-Three reflection studio. It gives metal hulls readable cool/warm
+// highlights without adding image assets or another Three.js addon/runtime.
+function _buildReflectionEnvironment() {
+  const envScene = new THREE.Scene();
+  envScene.background = new THREE.Color(0x02050d);
+  const panels = [
+    { pos:[ 12, 10,-16], size:[10,10], col:0xffb36b, power:4.0 },
+    { pos:[-16,  2,  8], size:[18,12], col:0x5d8dff, power:2.2 },
+    { pos:[  0,-12, 12], size:[14, 8], col:0x36ffd2, power:1.4 },
+  ];
+
+  panels.forEach(p => {
+    const geo = new THREE.PlaneGeometry(p.size[0], p.size[1]);
+    const mat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(p.col).multiplyScalar(p.power),
+      side: THREE.DoubleSide,
+    });
+    const panel = new THREE.Mesh(geo, mat);
+    panel.position.set(...p.pos);
+    panel.lookAt(0, 0, 0);
+    envScene.add(panel);
+  });
+
+  const pmrem = new THREE.PMREMGenerator(_renderer);
+  pmrem.compileCubemapShader();
+  _reflectionTarget = pmrem.fromScene(envScene, 0.05, 0.1, 100);
+  pmrem.dispose();
+  envScene.traverse(obj => {
+    if (obj.geometry) obj.geometry.dispose();
+    if (obj.material) obj.material.dispose();
+  });
+  return _reflectionTarget.texture;
+}
+
+// Low-contrast equirectangular backdrop: enough colour variation to establish
+// depth and art direction while leaving the authored star field readable.
+function _buildNebulaBackground() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#01030a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.globalCompositeOperation = 'screen';
+
+  const clouds = [
+    [180,180,310, '34,82,138', 0.20],
+    [390,270,250, '26,108,122',0.12],
+    [650,170,330, '92,35,126', 0.15],
+    [870,320,290, '24,70,128', 0.16],
+    [990,120,230, '20,92,108', 0.10],
+  ];
+  clouds.forEach(([x,y,r,rgb,a]) => {
+    const grad = ctx.createRadialGradient(x,y,0,x,y,r);
+    grad.addColorStop(0, `rgba(${rgb},${a})`);
+    grad.addColorStop(0.45, `rgba(${rgb},${a * 0.45})`);
+    grad.addColorStop(1, `rgba(${rgb},0)`);
+    ctx.fillStyle = grad;
+    ctx.fillRect(x-r, y-r, r*2, r*2);
+  });
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
 // Build a lumpy asteroid mesh with radius ast.r and color ast.col.
@@ -202,8 +306,13 @@ function initScene() {
   _renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   _renderer.setSize(W, H);
   _renderer.setClearColor(0x000006, 1);
+  _renderer.outputColorSpace = THREE.SRGBColorSpace;
+  _renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  _renderer.toneMappingExposure = 1.15;
 
   _scene = new THREE.Scene();
+  _scene.background = _buildNebulaBackground();
+  _scene.environment = _buildReflectionEnvironment();
 
   // Z-flip root — all game objects live here.
   // Bridges game +Z-forward to Three.js -Z-forward without touching the camera.
@@ -306,13 +415,13 @@ function initSceneForSystem(G) {
   }
   // Clear launch zone
   if (_launchZoneObj) {
-    _launchZoneObj.geometry.dispose();
+    _disposeObj(_launchZoneObj);
     _sceneRoot.remove(_launchZoneObj);
     _launchZoneObj = null;
   }
   // Clear NPC meshes (non-capital, enemies array was wiped by loadSystem)
   for (const [, mesh] of _npcMeshes) {
-    mesh.geometry.dispose();
+    _disposeObj(mesh);
     _sceneRoot.remove(mesh);
   }
   _npcMeshes.clear();
@@ -523,11 +632,7 @@ function drawFrame(G, dt) {
 
 // Dispose all geometry in an Object3D — handles both Mesh and Group.
 function _disposeObj(obj) {
-  if (obj.geometry) {
-    obj.geometry.dispose();
-  } else {
-    obj.traverse(m => { if (m.geometry) m.geometry.dispose(); });
-  }
+  obj.traverse(m => { if (m.geometry) m.geometry.dispose(); });
 }
 
 // ── NPC MESH SYNC (non-capital ships only) ──
