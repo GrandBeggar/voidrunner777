@@ -69,7 +69,7 @@ comparison. A visual improvement must not hide a material performance regression
 | V-012 | Asteroid rock map and cargo crate plating | `ACCEPTED` (audit gate open) | Branch `claude/v012-rock-and-cargo`. Asteroids get a dedicated crater/mottle map with radius-scaled UVs; cargo crates rebuilt non-indexed with crate-scale UVs. No draw-call increase | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "looks good" |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
-| V-014 | Projectile, particle and star point sprites | `AWAITING AUDIT` | Branch `claude/v014-projectiles`. `THREE.Points` had no map, so every bolt, spark and star drew as a hard square. Soft radial sprites; bullets and sparks additive, stars left on normal blending | Pending — needs an auditor other than Claude | Pending |
+| V-014 | Projectile, particle and star point sprites | `ACCEPTED` (audit gate open) | Branch `claude/v014-projectiles`. `THREE.Points` had no map, so every bolt, spark and star drew as a hard square. Soft radial sprites; bullets and sparks additive, stars left on normal blending | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "definitely better than the cubes that they replaced" |
 
 ## Acceptance notes
 
@@ -1322,6 +1322,53 @@ material change on three existing clouds, nothing added.
 **Verdict:** n/a — worker entry.
 
 **Gate transition:** V-014 `PROPOSED` → `AWAITING AUDIT`.
+
+### 2026-07-28 — Operator — human — V-014 accepted; 3D placeholder sweep complete
+
+**Operator feedback, verbatim:** "ok, those are definitely better than the cubes that they
+replaced haha"
+
+**Disposition:** V-014 `ACCEPTED`. This closes the sweep the operator opened on
+2026-07-28 when redirecting away from HUD work: every object then identified as
+"roughly rendered placeholder" in the 3D scene has now been lifted to v1 and accepted —
+stations (V-010, V-013), ships, pirate bases, capital components and the launch zone
+(V-011), planets and atmospheres (V-006, V-009), asteroids and cargo (V-012), and
+projectiles, sparks and stars (V-014). Spawn placement (V-008) and cockpit framing
+(V-007) were accepted alongside.
+
+**State of the register after this entry.** Nothing placeholder-shaped remains open. The
+outstanding items are all previously-deferred engineering rather than v1 coverage:
+
+- **V-002** bloom — should now be evaluated *with* V-014 present. Additive projectiles
+  plus the ~27% hard-clipped hull area under Linear tone mapping mean bloom will key off
+  weapon fire hard. The V-002 row already carries the tone-mapping caveat.
+- **V-003** Three.js global/module consolidation — removes the r160 deprecation warning.
+- **V-004** engine ribbons and thrust glow — note the V-007 correction: cockpit roll is
+  inert at `src/player.js:152`, and the canopy frame is already built to survive it being
+  switched back on.
+- **V-005** capital-ship component group leak — pre-existing, found during the V-001
+  audit, still untouched.
+
+**The one thing that has accumulated rather than resolved.** Eight slices are now
+operator-accepted with no independent audit: V-006, V-007, V-008, V-009, V-010, V-011,
+V-012 and V-014. Claude wrote all of them and therefore cannot supply the auditor `PASS`
+the merge gate requires. Every one is `ACCEPTED` on the operator gate and open on the
+auditor gate. Two clean ways to settle it, and it should be settled deliberately rather
+than by continuing to add slices:
+
+1. Codex audits the set — the relevant commits are `c3a417c`, `3cb8da7`, `fba96e5`,
+   `a80e567`, `78d5abe`, `ee6ac67`, `7ad5290`, `644ab47` and `81596f2`.
+2. The operator records an explicit waiver naming those commits, which keeps the ledger
+   honest about the fact that no second pair of eyes reviewed them.
+
+Each worker entry lists its own open risks; the recurring ones across the sweep are
+shared texture maps repeating across instances, hand-tuned constants (UV scales, halo
+strength, point sizes), and SOL being the only system measured.
+
+**Verdict:** ACCEPTED
+
+**Gate transition:** V-014 `AWAITING AUDIT` → `ACCEPTED` on the operator gate. Auditor
+gate remains open on all eight.
 
 ## Entry template
 
