@@ -65,8 +65,8 @@ comparison. A visual improvement must not hide a material performance regression
 | V-007 | Replace the basic HUD outline with a cockpit-like ship silhouette and structural framing | `ACCEPTED` (parked) | Branch `claude/v007-cockpit-frame`; commit `a80e567`. Centre view and warning row measured unchanged (22.78 → 22.77, 17.20 → 17.22) | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "ya this is fine", but HUD treated as placeholder pending upstream direction |
 | V-010 | Stations as assembled structures instead of convex-hull blobs | `AWAITING AUDIT` | Branch `claude/v010-station-structure`; commit `78d5abe`. Spawn-view cost 74 → 78 draw calls, 22490 → 25716 tris | Pending — needs an auditor other than Claude | Pending |
 | V-013 | Station plating and two-tone materials | `ACCEPTED` (audit gate open) | Branch `claude/v013-station-texture`; commit `ee6ac67`. Saturation spread 0.150 → 0.281, near-neutral pixels 0.2% → 11.6%, mean hue held 156.5 → 147.6 | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "much better already" |
-| V-011 | Plated materials for all convex-hull manufactured objects — ships, pirate bases, capital components, launch zone | `AWAITING AUDIT` | Branch `claude/v011-hull-plating`; commit pending. Box-projected UVs + per-face vertex tones; 45/45 NPC hulls carry both; no draw-call increase | Pending — needs an auditor other than Claude | Pending |
-| V-012 | Asteroids, cargo containers and landing zones | `PROPOSED` | Not started. Asteroids need a rock map, not the metal plating map; cargo is a bare `BoxGeometry` with unscaled UVs. Pirate bases moved into V-011 | — | — |
+| V-011 | Plated materials for all convex-hull manufactured objects — ships, pirate bases, capital components, launch zone | `ACCEPTED` (audit gate open) | Branch `claude/v011-hull-plating`; commit pending. Box-projected UVs + per-face vertex tones; 48/48 NPC hulls carry both; separate ship/station plating dialects added in `7ad5290`; no draw-call increase | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "looks good" |
+| V-012 | Asteroid rock map and cargo crate plating | `AWAITING AUDIT` | Branch `claude/v012-rock-and-cargo`. Asteroids get a dedicated crater/mottle map with radius-scaled UVs; cargo crates rebuilt non-indexed with crate-scale UVs. No draw-call increase | Pending — needs an auditor other than Claude | Pending |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
 
 ## Acceptance notes
@@ -1204,6 +1204,64 @@ claim is structural: no mesh or material is added per object.
 **Verdict:** n/a — worker entry.
 
 **Gate transition:** V-011 `PROPOSED` → `AWAITING AUDIT`.
+
+### 2026-07-28 — Claude — worker — V-012 asteroid rock and cargo crates
+
+**Role note:** worker; cannot supply the auditor `PASS`.
+
+**Branch/commit:** `claude/v012-rock-and-cargo`, branched from `7ad5290`. Separate
+worktree; operator's uncommitted work untouched.
+
+**What changed:** `src/renderer-threejs.js` only, +81 / −2.
+
+1. **`_buildRockTexture()`** — a third surface dialect alongside station and ship
+   plating. Panel seams on rock would have been plainly wrong, which is exactly why
+   asteroids were held out of V-011 rather than swept in for convenience. Broad tonal
+   mottling, impact craters drawn as a dark bowl with a lit rim on the sunward side, and
+   fine speckle for close range. Mottling and craters are drawn at −S, 0 and +S in x so
+   the map tiles without a seam, the same technique as the planet surfaces.
+2. **Asteroid UVs scale off the asteroid's own radius** (`1 / max(12, r*0.55)`) rather
+   than the fixed world scale used for hulls, so a 40 u rock and a 120 u rock show
+   comparable surface detail instead of the large one looking polished.
+3. **Cargo crates** rebuilt non-indexed so the shared `_boxUVs`/`_faceTones` helpers
+   apply, then given the ship plating dialect. `BoxGeometry` UVs run 0–1 per face, which
+   across a 3.2 u crate would have magnified the map into a single smear — the crate
+   scale is set independently for that reason.
+
+**A disposal detail worth stating, because it differs from V-010's trap.** The
+clear-asteroids loop calls `material.dispose()`, so asteroid materials must stay
+per-instance — a shared cached material would be freed out from under the next system
+load, exactly the bug avoided in V-010. The *map* is safe to share, because disposing a
+material does not dispose its textures. So the rock texture is cached once and every
+asteroid material points at it.
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; no
+page errors. On the running game all 27 asteroids carry `uv`, `color` and a `map`. Draw
+calls measured 71 at the pirate-base camera — this is a material and attribute change,
+so no meshes, geometry or draw calls are added.
+
+**Findings and open risks:**
+
+1. **Landing zones deliberately untouched.** They are wireframe boxes with a beacon
+   flash, and they read as holographic markers rather than physical objects. Texturing
+   them would make them look like solid crates and would probably hurt legibility. If
+   the operator wants them treated as physical, that is a separate decision, not an
+   oversight.
+2. **One rock map for every asteroid.** Crater placement is identical on all 27; only
+   the hull silhouette and colour differ. At close range in a dense field this will
+   repeat visibly.
+3. **Crater lighting is baked, not lit.** The rim highlight assumes a fixed light
+   direction, so it will not track the actual sun as an asteroid tumbles. Acceptable at
+   v1 and cheap; a normal map would fix it properly.
+4. **Cargo crates are 3.2 u** and almost always seen at distance, so this is the lowest
+   visual return of the three changes. Included for completeness of the sweep.
+5. **Bullets and particles remain point clouds** and were not part of this slice. They
+   are the last obviously-placeholder element in 3D space — worth registering if the
+   operator wants the sweep genuinely complete.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** V-012 `PROPOSED` → `AWAITING AUDIT`.
 
 ## Entry template
 

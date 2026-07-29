@@ -766,6 +766,70 @@ function _buildNebulaBackground() {
   return texture;
 }
 
+// Rock map. Panel plating would be plainly wrong here, so asteroids get their own
+// dialect: broad tonal mottling, impact craters drawn as a dark floor with a lit
+// rim, and fine speckle. Near-greyscale for the same reason as the hull map — it
+// multiplies the rock colour rather than replacing it.
+let _rockTex = null;
+function _buildRockTexture() {
+  if (_rockTex) return _rockTex;
+  const S = 512;
+  const canvas = document.createElement('canvas');
+  canvas.width = S; canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const rnd = _seededRand('asteroid-rock');
+
+  ctx.fillStyle = '#cfcac2';
+  ctx.fillRect(0, 0, S, S);
+
+  // Broad mottling. Drawn at -S, 0 and +S in x so the map tiles without a seam.
+  for (let i = 0; i < 70; i++) {
+    const cx = rnd() * S, cy = rnd() * S, r = 30 + rnd() * 120;
+    const g = 150 + Math.floor(rnd() * 95);
+    for (const off of [-S, 0, S]) {
+      const grad = ctx.createRadialGradient(cx + off, cy, 0, cx + off, cy, r);
+      grad.addColorStop(0, `rgba(${g},${g - 4},${g - 10},${0.30 + rnd() * 0.30})`);
+      grad.addColorStop(1, `rgba(${g},${g - 4},${g - 10},0)`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(cx + off - r, cy - r, r * 2, r * 2);
+    }
+  }
+
+  // Craters: dark bowl, brighter rim on the lit side. The rim is what reads as a
+  // crater rather than a stain.
+  for (let i = 0; i < 34; i++) {
+    const cx = rnd() * S, cy = rnd() * S, r = 6 + rnd() * 26;
+    for (const off of [-S, 0, S]) {
+      ctx.beginPath();
+      ctx.arc(cx + off, cy, r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(96,92,86,${0.30 + rnd() * 0.28})`;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(cx + off, cy - r * 0.14, r * 0.94, Math.PI * 1.06, Math.PI * 1.94);
+      ctx.strokeStyle = 'rgba(240,236,228,0.42)';
+      ctx.lineWidth = Math.max(1, r * 0.16);
+      ctx.stroke();
+    }
+  }
+
+  // Fine speckle for close-range texture.
+  for (let i = 0; i < 900; i++) {
+    const x = rnd() * S, y = rnd() * S, s = 1 + rnd() * 2.5;
+    const g = rnd() < 0.5 ? 108 : 232;
+    ctx.fillStyle = `rgba(${g},${g},${g},${0.10 + rnd() * 0.22})`;
+    ctx.fillRect(x, y, s, s);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.anisotropy = _renderer.capabilities.getMaxAnisotropy();
+  _rockTex = tex;
+  return tex;
+}
+
 // Build a lumpy asteroid mesh with radius ast.r and color ast.col.
 // 22 points distributed on a unit sphere, each scaled by ast.r * (0.7–1.0).
 function _buildAsteroidMesh(ast) {
@@ -781,9 +845,18 @@ function _buildAsteroidMesh(ast) {
     pts.push([Math.cos(theta) * r * s, y * s, Math.sin(theta) * r * s]);
   }
   const geo = _convexHullGeo(pts);
+  // Scaled off the asteroid's own radius so a 40 u rock and a 120 u rock show
+  // comparable surface detail rather than the big one looking smooth.
+  _boxUVs(geo, 1 / Math.max(12, ast.r * 0.55));
+  _faceTones(geo, 0.70, 1.14);
   const col = new THREE.Color(ast.col);
+  // Material stays per-asteroid: the clear-asteroids loop calls material.dispose(),
+  // so a shared cached material would be freed out from under the next system load.
+  // The map is safe to share — dispose() on a material does not touch its textures.
   const mat = new THREE.MeshStandardMaterial({
     color: col,
+    map: _buildRockTexture(),
+    vertexColors: true,
     emissive: col.clone().multiplyScalar(0.03),
     roughness: 0.95,
     metalness: 0.03,
@@ -1370,8 +1443,14 @@ function _syncCargos(G) {
 
   G.cargoBoxes.forEach(box => {
     if (!_cargoMeshes.has(box)) {
-      const geo = new THREE.BoxGeometry(_CARGO_BOX_SIZE, _CARGO_BOX_SIZE, _CARGO_BOX_SIZE);
-      const mesh = new THREE.Mesh(geo, _meshMat('#88ff44'));
+      // BoxGeometry UVs run 0–1 per face, which across a 3.2 u crate would magnify
+      // the plating map to a single smear. Rebuilt non-indexed so the shared hull
+      // helpers apply, with a scale tuned to crate size rather than world size.
+      const geo = new THREE.BoxGeometry(_CARGO_BOX_SIZE, _CARGO_BOX_SIZE, _CARGO_BOX_SIZE)
+        .toNonIndexed();
+      _boxUVs(geo, 1 / 1.6);
+      _faceTones(geo, 0.80, 1.12);
+      const mesh = new THREE.Mesh(geo, _hullMat('#88ff44', 'ship'));
       _sceneRoot.add(mesh);
       _cargoMeshes.set(box, mesh);
     }
