@@ -540,7 +540,26 @@ function _buildPlanetTexture(pl) {
   // base, or a blue world reads as blue-on-blue. Blend toward a fixed green-ochre
   // rather than rotating hue: rotation by a fixed angle sends blue to magenta and
   // costs the planet its identity colour, whereas blending cannot overshoot.
-  const land = base.clone().lerp(new THREE.Color().setRGB(0.44, 0.57, 0.29), 0.74);
+  // Land colour is derived from the sea rather than fixed. A constant green-ochre
+  // target reads well on Terra's saturated blue but collapses on green worlds —
+  // measured land/sea hue spread was 32 on Terra against 8 on Vega Prime, i.e.
+  // over-fitted to the one planet it was tuned against. Instead: pick whichever of
+  // two natural land hues sits furthest from this planet's own hue, and force a
+  // lightness step as well, so contrast survives even when both hues are close.
+  const hsl = {};
+  base.getHSL(hsl);
+  const hDeg = hsl.h * 360;
+  const arc = (a, b) => { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; };
+  const LAND_HUES = [35, 100];   // ochre/desert, and vegetation green
+  const landHue = arc(hDeg, LAND_HUES[0]) >= arc(hDeg, LAND_HUES[1]) ? LAND_HUES[0] : LAND_HUES[1];
+  // Saturation and lightness are NOT inherited from the sea. Deriving them meant a
+  // pale or desaturated world produced equally pale land, which is why the first
+  // attempt at this fix left Vega Prime unchanged and made Sirius II worse. A fixed
+  // saturation gives the hue something to actually register with, and the lightness
+  // step is forced away from the sea — lighter on dark worlds, darker on pale ones —
+  // so contrast holds even where the two hues end up close.
+  const landL = hsl.l > 0.62 ? Math.max(0.28, hsl.l - 0.26) : Math.min(0.74, hsl.l + 0.26);
+  const land = new THREE.Color().setHSL(landHue / 360, 0.42, landL);
   // Terrestrial water is darkened so land reads against it. Without this the two
   // sit at similar luminance and the coastline disappears under the cloud deck.
   const seaMul = (pl.r > 150 && pl.r < 400) ? 0.80 : 1.0;

@@ -71,6 +71,9 @@ comparison. A visual improvement must not hide a material performance regression
 
 | V-014 | Projectile, particle and star point sprites | `ACCEPTED` (audit gate open) | Branch `claude/v014-projectiles`. `THREE.Points` had no map, so every bolt, spark and star drew as a hard square. Soft radial sprites; bullets and sparks additive, stars left on normal blending | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "definitely better than the cubes that they replaced" |
 
+| V-015 | Land/sea contrast derived per planet instead of a fixed target | `AWAITING AUDIT` | Branch `claude/v015-land-contrast`. Found by the V-016 verification sweep: land colour was over-fitted to Terra. Surface colour spread now improves on every terrestrial world measured | Pending — needs an auditor other than Claude | Pending |
+| V-016 | Objective verification sweep across the accumulated slices | `AWAITING AUDIT` | 12 system loads, 3 full loops: no resource growth, no errors. Capitals verified. One real defect found (V-015) | Cannot be self-certified — objective evidence gathered, auditor verdict still required | Pending |
+
 ## Acceptance notes
 
 ### V-001
@@ -1369,6 +1372,95 @@ strength, point sizes), and SOL being the only system measured.
 
 **Gate transition:** V-014 `AWAITING AUDIT` → `ACCEPTED` on the operator gate. Auditor
 gate remains open on all eight.
+
+### 2026-07-28 — Claude — worker — V-016 verification sweep, and V-015 the defect it found
+
+**What this is, and what it is not.** The operator asked to settle the audit gap first. I
+wrote every slice in question, so I cannot supply the auditor `PASS` — self-certifying
+would hollow out the gate rather than close it. What I *can* do without that conflict is
+run the objective checks an auditor would run, aimed squarely at finding failures in my
+own work, and hand over the results. **The auditor gate remains open.** This entry is
+evidence, not a verdict.
+
+**Target chosen from my own recorded risks.** Successive worker entries flagged three
+things as unverified: other star systems, capital ships, and — twice — disposal on system
+change, where I had explicitly worried about geometry and material caches being freed out
+from under the next load. All three were tested.
+
+**Method:** three full loops through `sol → proxima → sirius → vega`, twelve system loads
+in total, tracking renderer resource counts, scene contents and every console error and
+warning; then forced capital-ship spawns; then a per-system visual capture.
+
+**Results — no defect found in the areas I was most worried about:**
+
+| Check | Result |
+|---|---|
+| Geometries across 12 loads | stable band, no growth (sol: 10 → 10 → 13 across loops) |
+| Textures across 12 loads | stable at 9–11, no growth |
+| Shader programs | stable at 5–8 |
+| Page errors / new console warnings | none |
+| Stations, planets, asteroids, NPCs per system | all populated in every system |
+| Capital ships | 6 groups, 20 component meshes, **20/20 carrying UVs** |
+
+The two disposal traps I had warned about do not materialise: repeated system loads
+neither leak nor blank the scene. Capital components pick up the V-011 plating correctly,
+which closes the risk the V-010 entry left open.
+
+**One real defect found, logged as V-015.** Vega's worlds looked flat. Measured land/sea
+hue spread: Terra 32.2, Mars 11.2, Sirius II 10.0, Vega Prime 8.3, Verdant 7.4. The land
+colour in `_buildPlanetTexture` blended toward a *fixed* green-ochre, which contrasts
+strongly against Terra's saturated blue and barely at all against a green ocean. I had
+tuned it against Terra and over-fitted to it — every other terrestrial world in the game
+was carrying the consequence.
+
+**A correction about my own instrument, which matters more than the fix.** The hue-spread
+metric above is not trustworthy, and I used it to steer two failed attempts before
+noticing:
+
+- It **wraps around 0°/360°**, which inflated the red worlds — Proxima b's "109" is an
+  artifact, not evidence of good separation.
+- It **ignores lightness entirely**, which is precisely how a green world carries its
+  land. It reported Sirius II getting *worse* under a change that in fact improved it.
+
+Re-measured as mean euclidean distance from the mean colour in RGB — one number covering
+hue, saturation and lightness together:
+
+| Planet | Before | After | Change |
+|---|---|---|---|
+| Terra | 36.28 | 51.43 | +42% |
+| Sirius II | 33.40 | 42.71 | +28% |
+| Mars | 28.97 | 35.54 | +23% |
+| Vega Prime | 31.21 | 35.60 | +14% |
+| Verdant | 31.09 | 32.97 | +6% |
+
+Every terrestrial world improves. Green worlds improve least and remain the weakest case,
+so V-015 mitigates the defect rather than eliminating it.
+
+**The V-015 fix:** land hue is chosen as whichever of two natural land hues (ochre 35°,
+vegetation 100°) sits furthest from the planet's own hue, and saturation and lightness are
+*forced* rather than inherited. An earlier attempt derived them from the sea, which left
+pale worlds with pale land — that version left Vega unchanged and made Sirius II worse,
+which is why both are stated here rather than quietly replaced.
+
+**Observations that are not defects:**
+
+1. **Vega has no gas giant and no moon** — all three planets are terrestrial (380, 250,
+   300), so all three carry cloud decks. Visually repetitive by system composition rather
+   than by bug.
+2. **The moon branch is SOL-only.** No planet outside SOL is ≤150 u, so the airless-moon
+   treatment only ever applies to Luna.
+3. **Vega Prime at 380 u sits close to the 400 u gas-giant threshold.** It renders
+   correctly as terrestrial, but the boundary is worth knowing.
+
+**What still needs an auditor.** Everything objective is now measured; what remains is
+judgement no author can supply for their own work — whether the visual results are
+*right*, whether the hand-tuned constants are well chosen, and whether the slices should
+merge. Commits awaiting review: `c3a417c`, `3cb8da7`, `fba96e5`, `a80e567`, `78d5abe`,
+`ee6ac67`, `7ad5290`, `644ab47`, `81596f2`, plus V-015.
+
+**Verdict:** n/a — evidence gathering by the author. Not a `PASS`.
+
+**Gate transition:** none. V-015 and V-016 enter as `AWAITING AUDIT`.
 
 ## Entry template
 
