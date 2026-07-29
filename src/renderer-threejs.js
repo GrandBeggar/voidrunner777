@@ -766,6 +766,40 @@ function _buildNebulaBackground() {
   return texture;
 }
 
+// ── POINT SPRITES ────────────────────────────────────────────
+// `THREE.Points` with no map draws hard-edged squares. Every projectile, spark and
+// star in the game was therefore a literal square pixel. These are white radial
+// falloffs whose alpha does the shaping; the per-point vertex colour supplies the
+// hue, so one sprite serves every weapon and faction.
+//   tracer — tight bright core, small halo: reads as a round bolt in flight
+//   spark  — soft and wide: debris and explosion motes
+//   star   — small core, gentle edge: takes the hard corners off the star field
+const _SPRITE_STOPS = {
+  tracer: [[0, 1], [0.20, 0.95], [0.45, 0.35], [1, 0]],
+  spark:  [[0, 1], [0.30, 0.55], [0.65, 0.16], [1, 0]],
+  star:   [[0, 1], [0.28, 0.75], [0.60, 0.20], [1, 0]],
+};
+const _spriteCache = {};
+function _spriteTex(kind) {
+  if (_spriteCache[kind]) return _spriteCache[kind];
+  const S = 64, h = S / 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = S; canvas.height = S;
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createRadialGradient(h, h, 0, h, h, h);
+  (_SPRITE_STOPS[kind] || _SPRITE_STOPS.spark).forEach(([t, a]) => {
+    grad.addColorStop(t, `rgba(255,255,255,${a})`);
+  });
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, S, S);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.generateMipmaps = true;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  _spriteCache[kind] = tex;
+  return tex;
+}
+
 // Rock map. Panel plating would be plainly wrong here, so asteroids get their own
 // dialect: broad tonal mottling, impact craters drawn as a dark floor with a lit
 // rim, and fine speckle. Near-greyscale for the same reason as the hull map — it
@@ -954,15 +988,20 @@ function initScene() {
   _lzGroup       = new THREE.Group(); _sceneRoot.add(_lzGroup);
   _asteroidGroup = new THREE.Group(); _sceneRoot.add(_asteroidGroup);
 
-  // Bullet point cloud (in sceneRoot so Z coords match game world)
+  // Point sprites — see _spriteTex. Without a map, THREE.Points renders hard-edged
+  // squares, which is why projectiles and sparks read as pixels rather than light.
   _bulletPositions = new Float32Array(MAX_BULLETS * 3);
   _bulletColors    = new Float32Array(MAX_BULLETS * 3);
   _bulletGeo = new THREE.BufferGeometry();
   _bulletGeo.setAttribute('position', new THREE.BufferAttribute(_bulletPositions, 3).setUsage(THREE.DynamicDrawUsage));
   _bulletGeo.setAttribute('color',    new THREE.BufferAttribute(_bulletColors,    3).setUsage(THREE.DynamicDrawUsage));
   _bulletGeo.setDrawRange(0, 0);
+  // Additive: weapon fire is emitted light, so it should brighten what it crosses
+  // rather than occlude it. depthWrite off so overlapping bolts do not cut each other.
   _bulletPoints = new THREE.Points(_bulletGeo, new THREE.PointsMaterial({
-    size: 1.5, vertexColors: true, sizeAttenuation: true,
+    size: 3.4, vertexColors: true, sizeAttenuation: true,
+    map: _spriteTex('tracer'), transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending,
   }));
   _bulletPoints.frustumCulled = false;
   _sceneRoot.add(_bulletPoints);
@@ -975,7 +1014,9 @@ function initScene() {
   _partGeo.setAttribute('color',    new THREE.BufferAttribute(_partColors,    3).setUsage(THREE.DynamicDrawUsage));
   _partGeo.setDrawRange(0, 0);
   _partPoints = new THREE.Points(_partGeo, new THREE.PointsMaterial({
-    size: 4, vertexColors: true, sizeAttenuation: false,
+    size: 7, vertexColors: true, sizeAttenuation: false,
+    map: _spriteTex('spark'), transparent: true, depthWrite: false,
+    blending: THREE.AdditiveBlending,
   }));
   _partPoints.frustumCulled = false;
   _sceneRoot.add(_partPoints);
@@ -1175,8 +1216,11 @@ function _buildStarField(G) {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
   geo.setAttribute('color',    new THREE.Float32BufferAttribute(colors, 3));
+  // Stars keep normal blending. Additive here would lift them over the V-001 nebula
+  // and cost the backdrop its restraint; the sprite is only here to round the corners.
   _starField = new THREE.Points(geo, new THREE.PointsMaterial({
-    size: 1.5, vertexColors: true, sizeAttenuation: false,
+    size: 2.4, vertexColors: true, sizeAttenuation: false,
+    map: _spriteTex('star'), transparent: true, depthWrite: false,
   }));
   // Stars live in _scene (world space), not _sceneRoot, and follow camera directly
   _scene.add(_starField);

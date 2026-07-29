@@ -66,8 +66,10 @@ comparison. A visual improvement must not hide a material performance regression
 | V-010 | Stations as assembled structures instead of convex-hull blobs | `AWAITING AUDIT` | Branch `claude/v010-station-structure`; commit `78d5abe`. Spawn-view cost 74 → 78 draw calls, 22490 → 25716 tris | Pending — needs an auditor other than Claude | Pending |
 | V-013 | Station plating and two-tone materials | `ACCEPTED` (audit gate open) | Branch `claude/v013-station-texture`; commit `ee6ac67`. Saturation spread 0.150 → 0.281, near-neutral pixels 0.2% → 11.6%, mean hue held 156.5 → 147.6 | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "much better already" |
 | V-011 | Plated materials for all convex-hull manufactured objects — ships, pirate bases, capital components, launch zone | `ACCEPTED` (audit gate open) | Branch `claude/v011-hull-plating`; commit pending. Box-projected UVs + per-face vertex tones; 48/48 NPC hulls carry both; separate ship/station plating dialects added in `7ad5290`; no draw-call increase | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "looks good" |
-| V-012 | Asteroid rock map and cargo crate plating | `AWAITING AUDIT` | Branch `claude/v012-rock-and-cargo`. Asteroids get a dedicated crater/mottle map with radius-scaled UVs; cargo crates rebuilt non-indexed with crate-scale UVs. No draw-call increase | Pending — needs an auditor other than Claude | Pending |
+| V-012 | Asteroid rock map and cargo crate plating | `ACCEPTED` (audit gate open) | Branch `claude/v012-rock-and-cargo`. Asteroids get a dedicated crater/mottle map with radius-scaled UVs; cargo crates rebuilt non-indexed with crate-scale UVs. No draw-call increase | Pending — needs an auditor other than Claude | Operator 2026-07-28: `ACCEPTED` — "looks good" |
 | V-008 | Start the player closer to stations, traffic, or other meaningful entities | `ACCEPTED` (audit gate still open) | Branch `claude/v008-spawn-proximity`; implementation commit `c3a417c`. Nearest station 6159u → 795u; nearest entity 5500u → ~431u; no hazard alarm across 16 runs | Not performed — Claude wrote this slice and cannot audit it | Operator 2026-07-27: `ACCEPTED` — "ya good" |
+
+| V-014 | Projectile, particle and star point sprites | `AWAITING AUDIT` | Branch `claude/v014-projectiles`. `THREE.Points` had no map, so every bolt, spark and star drew as a hard square. Soft radial sprites; bullets and sparks additive, stars left on normal blending | Pending — needs an auditor other than Claude | Pending |
 
 ## Acceptance notes
 
@@ -1262,6 +1264,64 @@ so no meshes, geometry or draw calls are added.
 **Verdict:** n/a — worker entry.
 
 **Gate transition:** V-012 `PROPOSED` → `AWAITING AUDIT`.
+
+### 2026-07-28 — Claude — worker — V-014 point sprites
+
+**Role note:** worker; cannot supply the auditor `PASS`.
+
+**Branch/commit:** `claude/v014-projectiles`, branched from `644ab47`. Separate worktree;
+operator's uncommitted work untouched.
+
+**The defect:** all three `THREE.Points` clouds — bullets, particles and the star field —
+were constructed with a bare `PointsMaterial` and no `map`. `THREE.Points` renders a
+hard-edged square in that case, so every projectile, explosion spark and star in the game
+was literally a square pixel. This was the last obviously-placeholder element left in the
+3D scene.
+
+**What changed:** `src/renderer-threejs.js` only. Adds `_spriteTex(kind)`, which builds
+white radial-falloff sprites whose *alpha* does the shaping. Colour still comes from the
+existing per-point vertex colours, so one sprite serves every weapon type and faction
+without touching the game-state side. Three profiles:
+
+| Sprite | Shape | Used by |
+|---|---|---|
+| `tracer` | tight bright core, small halo | bullets |
+| `spark` | soft, wide falloff | explosion and debris particles |
+| `star` | small core, gentle edge | star field |
+
+**Blending was chosen per cloud rather than uniformly.** Bullets and particles are
+additive: weapon fire and sparks are emitted light and should brighten what they cross
+rather than occlude it, with `depthWrite` off so overlapping bolts do not cut each other.
+The **star field deliberately keeps normal blending** — additive there would lift the
+stars over the V-001 nebula and cost the backdrop the restraint that slice was
+specifically remediated to protect. The sprite is applied only to round off the corners.
+
+**Evidence:** `node --check` passes on all 16 `src/*.js`; `git diff --check` clean; no page
+errors. Verified against real gameplay rather than a static scene — the trigger
+(`mousedown`, `src/player.js:94`) was held for ~900 ms with the player parked facing a
+station, producing 6 live bullets and 344 live particles at capture time. Material state
+read from the running game: bullet cloud mapped and additive, particle cloud mapped,
+star field mapped and still on normal blending. Draw calls 78, unchanged — this is a
+material change on three existing clouds, nothing added.
+
+**Findings and open risks:**
+
+1. **Sizes were raised to suit the sprites** (bullets 1.5 → 3.4, particles 4 → 7, stars
+   1.5 → 2.4). A soft falloff has less visual mass than a hard square of the same size,
+   so keeping the old numbers would have made everything fainter. These are judgement
+   values and are the most likely thing to want tuning.
+2. **Additive fire will interact with V-002 bloom.** Combined with the ~27% hard-clipped
+   area already noted under Linear tone mapping, bloom would key off projectiles hard.
+   V-002 should be evaluated with this slice present.
+3. **Bullets are still points, not stretched tracers.** True velocity-aligned streaks
+   need per-bullet quads or a custom shader; at 300 max bullets that is a real cost
+   decision, not a free change. Left for a polish pass.
+4. **Star field size increase is the riskiest visual call here**, since the star field is
+   always on screen behind everything. It is worth an explicit look on the live build.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** V-014 `PROPOSED` → `AWAITING AUDIT`.
 
 ## Entry template
 
