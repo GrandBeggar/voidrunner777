@@ -407,7 +407,7 @@ function _windowMat(col) {
     _winMatCache[col] = new THREE.MeshStandardMaterial({
       color: 0x1a1408,
       emissive: new THREE.Color(0xffc27a),
-      emissiveIntensity: 1.6,
+      emissiveIntensity: 2.8,
       roughness: 0.5,
       metalness: 0.0,
       toneMapped: true,
@@ -785,6 +785,152 @@ function _buildNebulaBackground() {
   return texture;
 }
 
+// ── BLOOM ────────────────────────────────────────────────────
+// Hand-rolled rather than EffectComposer/UnrealBloomPass: those live in the module
+// build's addons, and importing them would instantiate a *second* THREE alongside
+// the global build this file uses. That duplication is precisely what V-003 exists
+// to remove, and a post-processing stack straddling two THREE instances would not
+// share renderer or class identity. ~4 passes of plain ShaderMaterial is the
+// smaller price.
+//
+// Pipeline: scene → linear HDR target (tone mapping OFF, so values above 1 survive)
+// → bright pass → separable blur at half res → composite, which is where tone
+// mapping and sRGB encoding finally happen.
+//
+// Doing tone mapping at the END is the point. V-001 settled on Linear tone mapping,
+// which hard-clips: the V-013 audit measured ~27% of the station hull already at
+// max. Keying bloom off the clipped image would have bloomed the whole hull. Keying
+// it off the pre-tone-mapped linear buffer means only genuinely bright things —
+// weapon fire, engine glow, station windows — cross the threshold.
+const BLOOM = { threshold: 1.05, strength: 0.62, enabled: true };
+let _rtScene = null, _rtA = null, _rtB = null;
+let _fsScene = null, _fsCam = null, _fsQuad = null;
+let _matBright = null, _matBlur = null, _matComp = null;
+
+const _FS_VERT = `
+varying vec2 vUv;
+void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }`;
+
+const _BRIGHT_FRAG = `
+uniform sampler2D tSrc; uniform float uThreshold; varying vec2 vUv;
+void main() {
+  vec3 c = texture2D(tSrc, vUv).rgb;
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  // Soft knee: fades in over the threshold instead of popping at it.
+  float k = smoothstep(uThreshold, uThreshold + 0.6, l);
+  gl_FragColor = vec4(c * k, 1.0);
+}`;
+
+const _BLUR_FRAG = `
+uniform sampler2D tSrc; uniform vec2 uDir; uniform vec2 uTexel; varying vec2 vUv;
+void main() {
+  vec3 s = texture2D(tSrc, vUv).rgb * 0.227027;
+  vec2 o1 = uDir * uTexel * 1.3846153846;
+  vec2 o2 = uDir * uTexel * 3.2307692308;
+  s += (texture2D(tSrc, vUv + o1).rgb + texture2D(tSrc, vUv - o1).rgb) * 0.3162162162;
+  s += (texture2D(tSrc, vUv + o2).rgb + texture2D(tSrc, vUv - o2).rgb) * 0.0702702703;
+  gl_FragColor = vec4(s, 1.0);
+}`;
+
+// Tone mapping and sRGB encoding are done explicitly here so the result matches what
+// the renderer produced before this slice. Linear tone mapping is exposure-multiply
+// then clamp, which is what THREE.LinearToneMapping does.
+const _COMP_FRAG = `
+uniform sampler2D tScene; uniform sampler2D tBloom;
+uniform float uStrength; uniform float uExposure;
+varying vec2 vUv;
+vec3 lin2srgb(vec3 c) {
+  return mix(c * 12.92, 1.055 * pow(max(c, vec3(0.0)), vec3(0.41666)) - 0.055,
+             step(vec3(0.0031308), c));
+}
+void main() {
+  vec3 c = texture2D(tScene, vUv).rgb + texture2D(tBloom, vUv).rgb * uStrength;
+  c = clamp(c * uExposure, 0.0, 1.0);
+  gl_FragColor = vec4(lin2srgb(c), 1.0);
+}`;
+
+function _initBloom(w, h) {
+  const half = { w: Math.max(1, Math.floor(w / 2)), h: Math.max(1, Math.floor(h / 2)) };
+  const opts = { type: THREE.HalfFloatType, colorSpace: THREE.LinearSRGBColorSpace,
+                 minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+                 depthBuffer: true };
+  _rtScene = new THREE.WebGLRenderTarget(w, h, opts);
+  _rtA = new THREE.WebGLRenderTarget(half.w, half.h, { ...opts, depthBuffer: false });
+  _rtB = new THREE.WebGLRenderTarget(half.w, half.h, { ...opts, depthBuffer: false });
+
+  _matBright = new THREE.ShaderMaterial({
+    uniforms: { tSrc: { value: null }, uThreshold: { value: BLOOM.threshold } },
+    vertexShader: _FS_VERT, fragmentShader: _BRIGHT_FRAG, depthTest: false, depthWrite: false,
+  });
+  _matBlur = new THREE.ShaderMaterial({
+    uniforms: { tSrc: { value: null }, uDir: { value: new THREE.Vector2(1, 0) },
+                uTexel: { value: new THREE.Vector2(1 / half.w, 1 / half.h) } },
+    vertexShader: _FS_VERT, fragmentShader: _BLUR_FRAG, depthTest: false, depthWrite: false,
+  });
+  _matComp = new THREE.ShaderMaterial({
+    uniforms: { tScene: { value: null }, tBloom: { value: null },
+                uStrength: { value: BLOOM.strength },
+                uExposure: { value: _renderer.toneMappingExposure } },
+    vertexShader: _FS_VERT, fragmentShader: _COMP_FRAG, depthTest: false, depthWrite: false,
+  });
+
+  // Scene renders linear from here on; the composite applies exposure, the Linear
+  // tone-map clamp and sRGB encoding. Set once so no material is ever recompiled.
+  if (BLOOM.enabled) _renderer.toneMapping = THREE.NoToneMapping;
+
+  _fsScene = new THREE.Scene();
+  _fsCam = new THREE.Camera();
+  _fsQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), _matComp);
+  _fsQuad.frustumCulled = false;
+  _fsScene.add(_fsQuad);
+}
+
+function _resizeBloom(w, h) {
+  if (!_rtScene) return;
+  const hw = Math.max(1, Math.floor(w / 2)), hh = Math.max(1, Math.floor(h / 2));
+  _rtScene.setSize(w, h);
+  _rtA.setSize(hw, hh);
+  _rtB.setSize(hw, hh);
+  _matBlur.uniforms.uTexel.value.set(1 / hw, 1 / hh);
+}
+
+function _blit(mat, target) {
+  _fsQuad.material = mat;
+  _renderer.setRenderTarget(target);
+  _renderer.render(_fsScene, _fsCam);
+}
+
+function _renderWithBloom() {
+  if (!BLOOM.enabled || !_rtScene) { _renderer.render(_scene, _camera); return; }
+
+  // Tone mapping is switched off once, in _initBloom, NOT toggled here. `toneMapping`
+  // is part of the program cache key, so flipping it around the scene render marks
+  // every material for recompile twice per frame. The composite pass does the tone
+  // mapping instead, which is where it belongs anyway.
+  _renderer.setRenderTarget(_rtScene);
+  _renderer.clear();
+  _renderer.render(_scene, _camera);
+
+  _matBright.uniforms.tSrc.value = _rtScene.texture;
+  _blit(_matBright, _rtA);
+
+  // Two separable passes — wider skirt than one, still only four blits total.
+  for (let i = 0; i < 2; i++) {
+    _matBlur.uniforms.tSrc.value = _rtA.texture;
+    _matBlur.uniforms.uDir.value.set(1, 0);
+    _blit(_matBlur, _rtB);
+    _matBlur.uniforms.tSrc.value = _rtB.texture;
+    _matBlur.uniforms.uDir.value.set(0, 1);
+    _blit(_matBlur, _rtA);
+  }
+
+  _matComp.uniforms.tScene.value = _rtScene.texture;
+  _matComp.uniforms.tBloom.value = _rtA.texture;
+  _matComp.uniforms.uExposure.value = _renderer.toneMappingExposure;
+  _renderer.setRenderTarget(null);
+  _blit(_matComp, null);
+}
+
 // ── POINT SPRITES ────────────────────────────────────────────
 // `THREE.Points` with no map draws hard-edged squares. Every projectile, spark and
 // star in the game was therefore a literal square pixel. These are white radial
@@ -1022,6 +1168,10 @@ function initScene() {
     map: _spriteTex('tracer'), transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending,
   }));
+  // Above 1.0 so weapon fire clears the bloom threshold in the linear buffer. The
+  // composite clamps afterwards, so on-screen brightness is unchanged — this buys
+  // bloom eligibility, not a brighter bolt.
+  _bulletPoints.material.color.setScalar(2.4);
   _bulletPoints.frustumCulled = false;
   _sceneRoot.add(_bulletPoints);
 
@@ -1037,13 +1187,17 @@ function initScene() {
     map: _spriteTex('spark'), transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending,
   }));
+  _partPoints.material.color.setScalar(1.9);
   _partPoints.frustumCulled = false;
   _sceneRoot.add(_partPoints);
+
+  _initBloom(W, H);
 
   window.addEventListener('resize', () => {
     _renderer.setSize(W, H);
     _camera.aspect = W / H;
     _camera.updateProjectionMatrix();
+    _resizeBloom(W, H);
   });
 }
 
@@ -1323,7 +1477,7 @@ function drawFrame(G, dt) {
   _syncParticles(G);
   _updateDebris(dt);
 
-  _renderer.render(_scene, _camera);
+  _renderWithBloom();
 }
 
 // Dispose all geometry in an Object3D — handles both Mesh and Group.

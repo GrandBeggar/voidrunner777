@@ -56,7 +56,7 @@ comparison. A visual improvement must not hide a material performance regression
 | ID | Slice | State | Worker evidence | Auditor | Human gate |
 |---|---|---|---|---|---|
 | V-001 | Tone mapping, sRGB output, procedural reflections, and subtle nebula backdrop | `ACCEPTED` | Initial `bdf4561`; audit remediation `b238423` on `codex/visual-upgrade-v1` | Claude auditor 2026-07-27: `CHANGES REQUESTED` on `bdf4561`, then `PASS` on `b238423` (saturation 0.632 → 0.833, PMREM warnings 2 → 0) | Operator 2026-07-27: `ACCEPTED` after live review — "i don't see any issues. nothing is super noticeable yet." Ready to merge |
-| V-002 | Low-threshold bloom for emissive bullets, particles, and engines | `DEFERRED` | Requires a post-processing pipeline and a measured frame-time budget. Re-audit note: Linear tone mapping leaves ~27% of the station hull region hard-clipped, so bloom will key off far more area than the baseline look implies — revisit tone mapping as part of this slice | — | — |
+| V-002 | Bloom for emissive bullets, particles and station windows | `AWAITING AUDIT` | Branch `claude/v002-bloom`. Hand-rolled 4-pass pipeline against the global THREE build; tone mapping moved to the composite so bloom keys off the pre-clip linear buffer. Clipped area held at 0.96% → 0.99% while bright area rose 2.09% → 2.92% | Pending — needs an auditor other than Claude | Pending |
 | V-003 | Consolidate legacy global Three.js and module Three.js loading | `DEFERRED` | Removes the r160 deprecation warning; broader loader migration | — | — |
 | V-004 | Engine ribbons, thrust-responsive glow, and camera motion polish | `PROPOSED` | Not started | — | — |
 | V-005 | Dispose capital-ship component groups on removal | `PROPOSED` | Pre-existing leak found during the V-001 audit at `src/renderer-threejs.js:735` and `:431`; groups are removed from the scene but never disposed | — | — |
@@ -1461,6 +1461,94 @@ merge. Commits awaiting review: `c3a417c`, `3cb8da7`, `fba96e5`, `a80e567`, `78d
 **Verdict:** n/a — evidence gathering by the author. Not a `PASS`.
 
 **Gate transition:** none. V-015 and V-016 enter as `AWAITING AUDIT`.
+
+### 2026-07-28 — Claude — worker — V-002 bloom
+
+**Role note:** worker; cannot supply the auditor `PASS`.
+
+**Branch/commit:** `claude/v002-bloom`, branched from `42e81cf`. Separate worktree;
+operator's uncommitted work untouched.
+
+**Why it is hand-rolled.** `EffectComposer` and `UnrealBloomPass` live in the module
+build's addons. This file uses the *global* build, so importing them would instantiate a
+second THREE alongside it — the duplication V-003 exists to remove — and a
+post-processing stack straddling two THREE instances would not share renderer or class
+identity. Four passes of plain `ShaderMaterial` is the smaller price.
+
+**The pipeline, and why the order matters.** Scene renders into a linear half-float
+target with tone mapping **off**, so values above 1.0 survive; then bright pass, then two
+separable blurs at half resolution, then a composite that applies exposure, the Linear
+tone-map clamp and sRGB encoding.
+
+Doing tone mapping *last* is the whole point of the slice, and it resolves the caveat the
+V-013 audit attached to this row. V-001 settled on Linear tone mapping, which hard-clips,
+and ~27% of the station hull was already sitting at maximum. Had bloom keyed off the
+tone-mapped image, that entire hull would have bloomed. Keying it off the pre-clip linear
+buffer means only genuinely bright emitters cross the threshold. The threshold is
+deliberately held **above 1.0** for the same reason — lowering it to catch more would
+immediately re-admit the clipped hull.
+
+**Correctness check before any visual judgement.** With bloom strength forced to 0 the
+new pipeline must reproduce the old image, or the colour handling is wrong — a double
+sRGB encode or a lost tone-map would show up immediately:
+
+| Build | Mean luminance |
+|---|---|
+| Pre-bloom (`42e81cf`) | 35.43 |
+| Bloom pipeline, strength 0 | 35.64 |
+
+A 0.6% delta, consistent with half-float precision rather than a colour-space error.
+
+**A real bug found in my own first version.** I initially flipped
+`_renderer.toneMapping` to `NoToneMapping` around the scene render and restored it
+afterwards. `toneMapping` is part of the shader program cache key, so that toggle marks
+every material for recompilation **twice per frame**. Fixed by setting it off once at
+init and letting the composite own tone mapping permanently. Frame time here is
+vsync-capped so this would not have shown up in timings — it was caught by reading the
+code, not by measurement, which is worth noting given how much of this session leaned on
+measurement.
+
+**Making emitters eligible.** With the threshold necessarily above 1.0, the emitters had
+to rise to meet it: station windows `emissiveIntensity` 1.6 → 2.8, bullet material colour
+×2.4, particle colour ×1.9. Because the composite clamps afterwards, on-screen brightness
+of the sources is essentially unchanged — this buys bloom eligibility, not brighter
+bolts.
+
+**Result, fixed camera on station[0] with NPCs cleared:**
+
+| | Bloom off | Bloom on |
+|---|---|---|
+| Mean luminance | 35.89 | 37.24 |
+| Bright area (L>170) | 2.09% | 2.92% |
+| Clipped area | 0.96% | **0.99%** |
+
+Bright area grows 40% while clipped area is effectively static. That is the slice
+working as intended: glow around windows and weapon fire, no wash over the hull.
+
+**Findings and open risks:**
+
+1. **The draw-call metric used throughout this session is now invalid.**
+   `_renderer.info.render.calls` reports only the most recent pass, so with the composite
+   last it reads `1`. Any future call-count comparison must sum across passes or sample
+   before the composite. Prior figures in this ledger predate bloom and remain valid for
+   their own commits.
+2. **No frame-time claim, and this is the slice where that hurts most.** Bloom adds a
+   full-resolution half-float target plus four blits. Frame time is vsync-capped at
+   16.7 ms on software rendering here, so the measurement carries no information. This
+   genuinely needs a real GPU, and it is the one item in the register where the
+   deferred perf budget was the stated reason for deferral in the first place.
+3. **Memory:** one full-resolution half-float target plus two half-resolution ones, and
+   they resize with the window. Not measured against a memory ceiling.
+4. **`BLOOM.enabled` is a runtime escape hatch.** Setting it false restores the direct
+   render path, but note tone mapping is only re-enabled at init, so toggling it live
+   would render untone-mapped. Fine as a debug switch, not a user setting as written.
+5. **Threshold and strength are hand-tuned** (1.05 / 0.62) at one camera on one station.
+   Other content — explosions, capital ship debris, the sun — was not surveyed for
+   over-bloom.
+
+**Verdict:** n/a — worker entry.
+
+**Gate transition:** V-002 `DEFERRED` → `AWAITING AUDIT`.
 
 ## Entry template
 
